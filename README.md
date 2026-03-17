@@ -1,0 +1,1 @@
+# qubership-logql-to-logsql-proxy
