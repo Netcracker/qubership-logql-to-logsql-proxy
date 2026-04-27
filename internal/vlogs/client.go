@@ -49,6 +49,10 @@ type Client struct {
 	maxB   int64 // MaxResponseBodyBytes, cached for convenience
 }
 
+func closeBody(c io.Closer) {
+	_ = c.Close()
+}
+
 // NewClient constructs a Client with a tuned HTTP transport derived from cfg.
 // The returned client satisfies VLogsClient.
 func NewClient(cfg config.VLogsConfig, maxResponseBytes int64) *Client {
@@ -99,7 +103,7 @@ func (c *Client) QueryLogs(ctx context.Context, req LogQueryRequest, fn func(Rec
 	if err != nil {
 		return fmt.Errorf("QueryLogs HTTP: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
@@ -133,7 +137,7 @@ func (c *Client) QueryHits(ctx context.Context, req HitsQueryRequest) ([]HitBuck
 	if err != nil {
 		return nil, fmt.Errorf("QueryHits HTTP: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
@@ -183,7 +187,7 @@ func (c *Client) FieldNames(ctx context.Context, req FieldNamesRequest) ([]strin
 	if err != nil {
 		return nil, fmt.Errorf("FieldNames HTTP: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
@@ -228,7 +232,7 @@ func (c *Client) FieldValues(ctx context.Context, req FieldValuesRequest) ([]str
 	if err != nil {
 		return nil, fmt.Errorf("FieldValues HTTP: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
