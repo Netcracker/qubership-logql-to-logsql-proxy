@@ -43,15 +43,15 @@ type HitsQueryRequest struct {
 
 // FieldNamesRequest parameterises GET /select/logsql/field_names.
 type FieldNamesRequest struct {
-	Query string    // LogsQL filter to scope which fields are returned
+	Query string // LogsQL filter to scope which fields are returned
 	Start time.Time
 	End   time.Time
 }
 
 // FieldValuesRequest parameterises GET /select/logsql/field_values.
 type FieldValuesRequest struct {
-	FieldName string    // the field whose distinct values are requested
-	Query     string    // LogsQL filter to scope the results
+	FieldName string // the field whose distinct values are requested
+	Query     string // LogsQL filter to scope the results
 	Start     time.Time
 	End       time.Time
 	Limit     int // maximum number of values; 0 means server default

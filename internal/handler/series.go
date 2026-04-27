@@ -92,8 +92,7 @@ func isLargeOrCancelled(err error) bool {
 	if err == vlogs.ErrResponseTooLarge {
 		return true
 	}
-	switch err {
-	case nil:
+	if err == nil {
 		return false
 	}
 	// context.Canceled and context.DeadlineExceeded: treat partial result as OK.

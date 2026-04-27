@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"io"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -176,7 +176,7 @@ func (h *captureHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		w.Header().Set("Content-Type", "application/json")
 		// Empty values array — the object-per-entry format VictoriaLogs uses.
-		fmt.Fprint(w, `{"values":[]}`)
+		_, _ = fmt.Fprint(w, `{"values":[]}`)
 	}
 }
 

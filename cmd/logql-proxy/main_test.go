@@ -8,9 +8,9 @@ import (
 
 func TestBuildLoggerRespectsLevelThresholds(t *testing.T) {
 	tests := []struct {
-		level       string
-		enabled     slog.Level
-		disabled    slog.Level
+		level    string
+		enabled  slog.Level
+		disabled slog.Level
 	}{
 		{level: "debug", enabled: slog.LevelDebug, disabled: slog.Level(-8)},
 		{level: "warn", enabled: slog.LevelWarn, disabled: slog.LevelInfo},
