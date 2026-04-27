@@ -43,8 +43,6 @@ jobs:
       sonar-project-key: ${{ needs.prepare.outputs.sonar-project-key }}
       cover-packages: './cmd,./internal/...'
       skip-docker: true
-    secrets:
-      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
     permissions:
       contents: read
       pull-requests: write
