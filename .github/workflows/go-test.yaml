@@ -13,10 +13,13 @@ jobs:
       sonar-project-key: ${{ steps.config.outputs.sonar-project-key }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
       - name: Resolve sonar project key based on restricted actors
         id: config
         env:
           ACTOR: ${{ github.actor }}
+          SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
         run: |
           restricted=$(python3 -c "
           import yaml, os
@@ -28,7 +31,7 @@ jobs:
           if [ "$restricted" = "true" ]; then
             echo "sonar-project-key=" >> "$GITHUB_OUTPUT"
           else
-            echo "sonar-project-key=${{ vars.SONAR_PROJECT_KEY }}" >> "$GITHUB_OUTPUT"
+            echo "sonar-project-key=$SONAR_PROJECT_KEY" >> "$GITHUB_OUTPUT"
           fi
 
   test:
@@ -40,7 +43,8 @@ jobs:
       sonar-project-key: ${{ needs.prepare.outputs.sonar-project-key }}
       cover-packages: './cmd,./internal/...'
       skip-docker: true
-    secrets: inherit
+    secrets:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
     permissions:
       contents: read
       pull-requests: write
