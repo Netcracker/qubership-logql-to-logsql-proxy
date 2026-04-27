@@ -1,17 +1,16 @@
-package vlogs_test
+package vlogs
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
+	"io"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/config"
-	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/vlogs"
 )
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -20,8 +19,8 @@ import (
 
 func TestStreamDecoderSingleRecord(t *testing.T) {
 	ndjson := `{"_msg":"hello","_time":"2024-01-15T12:00:00Z","app":"api"}` + "\n"
-	var records []vlogs.Record
-	err := vlogs.StreamDecoder(context.Background(), strings.NewReader(ndjson), 1<<20, func(r vlogs.Record) error {
+	var records []Record
+	err := StreamDecoder(context.Background(), strings.NewReader(ndjson), 1<<20, func(r Record) error {
 		records = append(records, r)
 		return nil
 	})
@@ -48,7 +47,7 @@ func TestStreamDecoderMultipleRecords(t *testing.T) {
 	ndjson := strings.Join(lines, "\n") + "\n"
 
 	var count int
-	err := vlogs.StreamDecoder(context.Background(), strings.NewReader(ndjson), 1<<20, func(r vlogs.Record) error {
+	err := StreamDecoder(context.Background(), strings.NewReader(ndjson), 1<<20, func(r Record) error {
 		count++
 		return nil
 	})
@@ -71,7 +70,7 @@ func TestStreamDecoderContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	var count int
-	err := vlogs.StreamDecoder(ctx, strings.NewReader(ndjson), 1<<20, func(r vlogs.Record) error {
+	err := StreamDecoder(ctx, strings.NewReader(ndjson), 1<<20, func(r Record) error {
 		count++
 		if count == 1 {
 			cancel() // cancel after the first record
@@ -95,20 +94,20 @@ func TestStreamDecoderMaxBytesEnforced(t *testing.T) {
 	ndjson := strings.Join(lines, "\n") + "\n"
 
 	// Set maxBytes to just 50 bytes — much less than the full payload.
-	err := vlogs.StreamDecoder(context.Background(), strings.NewReader(ndjson), 50, func(_ vlogs.Record) error {
+	err := StreamDecoder(context.Background(), strings.NewReader(ndjson), 50, func(_ Record) error {
 		return nil
 	})
 	if err == nil {
 		t.Fatal("expected ErrResponseTooLarge, got nil")
 	}
-	if err != vlogs.ErrResponseTooLarge {
+	if err != ErrResponseTooLarge {
 		t.Errorf("expected ErrResponseTooLarge, got %v", err)
 	}
 }
 
 func TestStreamDecoderMalformedJSON(t *testing.T) {
 	ndjson := "not valid json\n"
-	err := vlogs.StreamDecoder(context.Background(), strings.NewReader(ndjson), 1<<20, func(_ vlogs.Record) error {
+	err := StreamDecoder(context.Background(), strings.NewReader(ndjson), 1<<20, func(_ Record) error {
 		return nil
 	})
 	if err == nil {
@@ -119,7 +118,7 @@ func TestStreamDecoderMalformedJSON(t *testing.T) {
 func TestStreamDecoderSkipsBlankLines(t *testing.T) {
 	ndjson := "\n" + `{"_msg":"hi","_time":"2024-01-15T12:00:00Z"}` + "\n\n"
 	var count int
-	err := vlogs.StreamDecoder(context.Background(), strings.NewReader(ndjson), 1<<20, func(_ vlogs.Record) error {
+	err := StreamDecoder(context.Background(), strings.NewReader(ndjson), 1<<20, func(_ Record) error {
 		count++
 		return nil
 	})
@@ -135,23 +134,39 @@ func TestStreamDecoderSkipsBlankLines(t *testing.T) {
 // Helpers for client tests
 // ────────────────────────────────────────────────────────────────────────────
 
-// newTestClient creates a Client pointing at the given test server URL.
-func newTestClient(serverURL string, extra ...func(*config.VLogsConfig)) *vlogs.Client {
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
+
+func jsonResponse(status int, body string) *http.Response {
+	return &http.Response{
+		StatusCode: status,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+}
+
+// newTestClient creates a Client with an in-memory HTTP transport.
+func newTestClient(rt http.RoundTripper, extra ...func(*config.VLogsConfig)) *Client {
 	cfg := config.VLogsConfig{
-		URL:             serverURL,
+		URL:             "http://victorialogs.test",
 		MaxIdleConns:    10,
 		MaxConnsPerHost: 5,
 	}
 	for _, fn := range extra {
 		fn(&cfg)
 	}
-	return vlogs.NewClient(cfg, 64*1024*1024)
+	cl := NewClient(cfg, 64*1024*1024)
+	cl.httpCl.Transport = rt
+	return cl
 }
 
 // captureHandler is an http.Handler that records the last received request.
 type captureHandler struct {
 	last *http.Request
-	body http.HandlerFunc
+	body func(http.ResponseWriter, *http.Request)
 }
 
 func (h *captureHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -171,11 +186,11 @@ func (h *captureHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func TestDecorateRequestNoAuth(t *testing.T) {
 	h := &captureHandler{}
-	srv := httptest.NewServer(h)
-	defer srv.Close()
-
-	cl := newTestClient(srv.URL)
-	_, _ = cl.FieldNames(context.Background(), vlogs.FieldNamesRequest{
+	cl := newTestClient(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		h.last = req
+		return jsonResponse(http.StatusOK, `{"values":[]}`), nil
+	}))
+	_, _ = cl.FieldNames(context.Background(), FieldNamesRequest{
 		Query: "*",
 		Start: time.Now().Add(-time.Hour),
 		End:   time.Now(),
@@ -191,13 +206,13 @@ func TestDecorateRequestNoAuth(t *testing.T) {
 
 func TestDecorateRequestBasicAuth(t *testing.T) {
 	h := &captureHandler{}
-	srv := httptest.NewServer(h)
-	defer srv.Close()
-
-	cl := newTestClient(srv.URL, func(c *config.VLogsConfig) {
+	cl := newTestClient(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		h.last = req
+		return jsonResponse(http.StatusOK, `{"values":[]}`), nil
+	}), func(c *config.VLogsConfig) {
 		c.BasicAuth = &config.BasicAuthConfig{Username: "user", Password: "secret"}
 	})
-	_, _ = cl.FieldNames(context.Background(), vlogs.FieldNamesRequest{Query: "*", Start: time.Now().Add(-time.Hour), End: time.Now()})
+	_, _ = cl.FieldNames(context.Background(), FieldNamesRequest{Query: "*", Start: time.Now().Add(-time.Hour), End: time.Now()})
 
 	if h.last == nil {
 		t.Fatal("no request received")
@@ -213,13 +228,13 @@ func TestDecorateRequestBasicAuth(t *testing.T) {
 
 func TestDecorateRequestBearerToken(t *testing.T) {
 	h := &captureHandler{}
-	srv := httptest.NewServer(h)
-	defer srv.Close()
-
-	cl := newTestClient(srv.URL, func(c *config.VLogsConfig) {
+	cl := newTestClient(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		h.last = req
+		return jsonResponse(http.StatusOK, `{"values":[]}`), nil
+	}), func(c *config.VLogsConfig) {
 		c.BearerToken = "my-token"
 	})
-	_, _ = cl.FieldNames(context.Background(), vlogs.FieldNamesRequest{Query: "*", Start: time.Now().Add(-time.Hour), End: time.Now()})
+	_, _ = cl.FieldNames(context.Background(), FieldNamesRequest{Query: "*", Start: time.Now().Add(-time.Hour), End: time.Now()})
 
 	if h.last == nil {
 		t.Fatal("no request received")
@@ -232,13 +247,13 @@ func TestDecorateRequestBearerToken(t *testing.T) {
 
 func TestDecorateRequestExtraHeaders(t *testing.T) {
 	h := &captureHandler{}
-	srv := httptest.NewServer(h)
-	defer srv.Close()
-
-	cl := newTestClient(srv.URL, func(c *config.VLogsConfig) {
+	cl := newTestClient(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		h.last = req
+		return jsonResponse(http.StatusOK, `{"values":[]}`), nil
+	}), func(c *config.VLogsConfig) {
 		c.ExtraHeaders = map[string]string{"X-Tenant-ID": "prod", "X-Custom": "flag"}
 	})
-	_, _ = cl.FieldNames(context.Background(), vlogs.FieldNamesRequest{Query: "*", Start: time.Now().Add(-time.Hour), End: time.Now()})
+	_, _ = cl.FieldNames(context.Background(), FieldNamesRequest{Query: "*", Start: time.Now().Add(-time.Hour), End: time.Now()})
 
 	if h.last == nil {
 		t.Fatal("no request received")
@@ -253,13 +268,13 @@ func TestDecorateRequestExtraHeaders(t *testing.T) {
 
 func TestDecorateRequestExtraParams(t *testing.T) {
 	h := &captureHandler{}
-	srv := httptest.NewServer(h)
-	defer srv.Close()
-
-	cl := newTestClient(srv.URL, func(c *config.VLogsConfig) {
+	cl := newTestClient(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		h.last = req
+		return jsonResponse(http.StatusOK, `{"values":[]}`), nil
+	}), func(c *config.VLogsConfig) {
 		c.ExtraParams = map[string]string{"accountID": "42"}
 	})
-	_, _ = cl.FieldNames(context.Background(), vlogs.FieldNamesRequest{Query: "*", Start: time.Now().Add(-time.Hour), End: time.Now()})
+	_, _ = cl.FieldNames(context.Background(), FieldNamesRequest{Query: "*", Start: time.Now().Add(-time.Hour), End: time.Now()})
 
 	if h.last == nil {
 		t.Fatal("no request received")
@@ -280,26 +295,22 @@ func TestDecorateRequestExtraParams(t *testing.T) {
 // ────────────────────────────────────────────────────────────────────────────
 
 func TestFieldNamesRequest(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	cl := newTestClient(roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if !strings.HasSuffix(r.URL.Path, "/field_names") {
 			t.Errorf("unexpected path %q", r.URL.Path)
 		}
 		if r.URL.Query().Get("query") == "" {
 			t.Error("'query' param missing")
 		}
-		w.Header().Set("Content-Type", "application/json")
-		// VictoriaLogs returns each field name as an object: {"value":"…","hits":N}
 		resp := map[string]any{"values": []map[string]any{
 			{"value": "app", "hits": 100},
 			{"value": "level", "hits": 50},
 			{"value": "host", "hits": 30},
 		}}
-		_ = json.NewEncoder(w).Encode(resp)
+		body, _ := json.Marshal(resp)
+		return jsonResponse(http.StatusOK, string(body)), nil
 	}))
-	defer srv.Close()
-
-	cl := newTestClient(srv.URL)
-	names, err := cl.FieldNames(context.Background(), vlogs.FieldNamesRequest{
+	names, err := cl.FieldNames(context.Background(), FieldNamesRequest{
 		Query: "*",
 		Start: time.Now().Add(-time.Hour),
 		End:   time.Now(),
@@ -316,26 +327,22 @@ func TestFieldNamesRequest(t *testing.T) {
 }
 
 func TestFieldValuesRequest(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	cl := newTestClient(roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if !strings.HasSuffix(r.URL.Path, "/field_values") {
 			t.Errorf("unexpected path %q", r.URL.Path)
 		}
 		if r.URL.Query().Get("field") == "" {
 			t.Error("'field' param missing")
 		}
-		w.Header().Set("Content-Type", "application/json")
-		// VictoriaLogs returns each value as an object: {"value":"…","hits":N}
 		resp := map[string]any{"values": []map[string]any{
 			{"value": "api", "hits": 50},
 			{"value": "worker", "hits": 30},
 			{"value": "nginx", "hits": 20},
 		}}
-		_ = json.NewEncoder(w).Encode(resp)
+		body, _ := json.Marshal(resp)
+		return jsonResponse(http.StatusOK, string(body)), nil
 	}))
-	defer srv.Close()
-
-	cl := newTestClient(srv.URL)
-	values, err := cl.FieldValues(context.Background(), vlogs.FieldValuesRequest{
+	values, err := cl.FieldValues(context.Background(), FieldValuesRequest{
 		FieldName: "app",
 		Query:     "*",
 		Start:     time.Now().Add(-time.Hour),
@@ -353,14 +360,98 @@ func TestFieldValuesRequest(t *testing.T) {
 }
 
 func TestFieldNamesRequestNonOKStatus(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+	cl := newTestClient(roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusInternalServerError, "internal server error\n"), nil
 	}))
-	defer srv.Close()
-
-	cl := newTestClient(srv.URL)
-	_, err := cl.FieldNames(context.Background(), vlogs.FieldNamesRequest{Query: "*", Start: time.Now().Add(-time.Hour), End: time.Now()})
+	_, err := cl.FieldNames(context.Background(), FieldNamesRequest{Query: "*", Start: time.Now().Add(-time.Hour), End: time.Now()})
 	if err == nil {
 		t.Fatal("expected error for HTTP 500, got nil")
+	}
+}
+
+func TestQueryLogsRequestAndDecoding(t *testing.T) {
+	var gotMethod, gotPath, gotContentType, gotBody string
+	cl := newTestClient(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		gotMethod = req.Method
+		gotPath = req.URL.Path
+		gotContentType = req.Header.Get("Content-Type")
+		body, _ := io.ReadAll(req.Body)
+		gotBody = string(body)
+		return jsonResponse(http.StatusOK, `{"_msg":"one","_time":"2024-01-15T12:00:00Z"}`+"\n"), nil
+	}))
+
+	var records []Record
+	err := cl.QueryLogs(context.Background(), LogQueryRequest{
+		Query: `app:="api"`,
+		Start: time.Unix(1705320000, 0).UTC(),
+		End:   time.Unix(1705323600, 0).UTC(),
+		Limit: 25,
+	}, func(r Record) error {
+		records = append(records, r)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("QueryLogs(): %v", err)
+	}
+	if gotMethod != http.MethodPost || gotPath != "/select/logsql/query" {
+		t.Errorf("request = %s %s, want POST /select/logsql/query", gotMethod, gotPath)
+	}
+	if gotContentType != "application/x-www-form-urlencoded" {
+		t.Errorf("Content-Type = %q", gotContentType)
+	}
+	if !strings.Contains(gotBody, "query=app%3A%3D%22api%22") || !strings.Contains(gotBody, "limit=25") {
+		t.Errorf("encoded body = %q", gotBody)
+	}
+	if len(records) != 1 || records[0]["_msg"] != "one" {
+		t.Errorf("decoded records = %v", records)
+	}
+}
+
+func TestQueryLogsNonOKStatus(t *testing.T) {
+	cl := newTestClient(roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusBadGateway, "bad gateway"), nil
+	}))
+
+	err := cl.QueryLogs(context.Background(), LogQueryRequest{
+		Query: `app:="api"`,
+		Start: time.Now().Add(-time.Hour),
+		End:   time.Now(),
+	}, func(Record) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "VL returned HTTP 502") {
+		t.Fatalf("QueryLogs() error = %v, want HTTP status detail", err)
+	}
+}
+
+func TestQueryHitsSuccessAndErrors(t *testing.T) {
+	cl := newTestClient(roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusOK, `{"hits":[{"timestamp":"2024-01-15T12:00:00Z","hits":2},{"timestamp":"2024-01-15T12:00:00.123456789Z","hits":3}]}`), nil
+	}))
+
+	buckets, err := cl.QueryHits(context.Background(), HitsQueryRequest{
+		Query: `app:="api"`,
+		Start: time.Now().Add(-time.Hour),
+		End:   time.Now(),
+		Step:  90 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("QueryHits(): %v", err)
+	}
+	if len(buckets) != 2 || buckets[0].Count != 2 || buckets[1].Count != 3 {
+		t.Errorf("buckets = %+v", buckets)
+	}
+	if got := formatDuration(90 * time.Second); got != "1m30s" {
+		t.Errorf("formatDuration() = %q, want 1m30s", got)
+	}
+
+	bad := newTestClient(roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusOK, `{"hits":[{"timestamp":"not-a-time","hits":1}]}`), nil
+	}))
+	if _, err := bad.QueryHits(context.Background(), HitsQueryRequest{
+		Query: `app:="api"`,
+		Start: time.Now().Add(-time.Hour),
+		End:   time.Now(),
+		Step:  time.Minute,
+	}); err == nil {
+		t.Fatal("expected timestamp parse error, got nil")
 	}
 }

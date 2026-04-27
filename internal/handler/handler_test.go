@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/valyala/fasthttp"
+	"github.com/valyala/fasthttp/fasthttputil"
 
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/config"
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/handler"
@@ -97,18 +98,27 @@ func buildHandler(deps *handler.Deps) fasthttp.RequestHandler {
 	return deps.BuildHandler()
 }
 
-// newTestServer starts a real fasthttp server on an ephemeral localhost port and
-// returns its base URL and a cleanup function. Tests use the standard http.Get /
-// http.Client to send requests, exactly as in production.
+// newTestServer serves requests through a fasthttp in-memory listener and
+// temporarily redirects the default net/http transport to it. This keeps the
+// existing http.Get-based tests intact without requiring OS-level sockets.
 func newTestServer(t *testing.T, h fasthttp.RequestHandler) (string, func()) {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("net.Listen: %v", err)
-	}
+	ln := fasthttputil.NewInmemoryListener()
 	srv := &fasthttp.Server{Handler: h}
 	go func() { _ = srv.Serve(ln) }()
-	return "http://" + ln.Addr().String(), func() { _ = srv.Shutdown() }
+
+	prevTransport := http.DefaultTransport
+	http.DefaultTransport = &http.Transport{
+		DialContext: func(context.Context, string, string) (net.Conn, error) {
+			return ln.Dial()
+		},
+	}
+
+	return "http://inmemory.local", func() {
+		http.DefaultTransport = prevTransport
+		_ = srv.Shutdown()
+		_ = ln.Close()
+	}
 }
 
 // ────────────────────────────────────────────────────────────────────────────
