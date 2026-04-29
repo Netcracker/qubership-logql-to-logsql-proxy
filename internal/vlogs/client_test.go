@@ -3,6 +3,7 @@ package vlogs
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -419,6 +420,71 @@ func TestQueryLogsNonOKStatus(t *testing.T) {
 	}, func(Record) error { return nil })
 	if err == nil || !strings.Contains(err.Error(), "VL returned HTTP 502") {
 		t.Fatalf("QueryLogs() error = %v, want HTTP status detail", err)
+	}
+}
+
+func TestTransportErrors(t *testing.T) {
+	transportErr := errors.New("connection refused")
+	rt := roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, transportErr
+	})
+	cl := newTestClient(rt)
+	now := time.Now()
+
+	if err := cl.QueryLogs(context.Background(), LogQueryRequest{Query: "*", Start: now.Add(-time.Hour), End: now}, func(Record) error { return nil }); err == nil {
+		t.Error("QueryLogs: expected transport error, got nil")
+	}
+	if _, err := cl.QueryHits(context.Background(), HitsQueryRequest{Query: "*", Start: now.Add(-time.Hour), End: now, Step: time.Minute}); err == nil {
+		t.Error("QueryHits: expected transport error, got nil")
+	}
+	if _, err := cl.FieldNames(context.Background(), FieldNamesRequest{Query: "*", Start: now.Add(-time.Hour), End: now}); err == nil {
+		t.Error("FieldNames: expected transport error, got nil")
+	}
+	if _, err := cl.FieldValues(context.Background(), FieldValuesRequest{FieldName: "app", Query: "*", Start: now.Add(-time.Hour), End: now}); err == nil {
+		t.Error("FieldValues: expected transport error, got nil")
+	}
+}
+
+func TestQueryHitsNonOKStatus(t *testing.T) {
+	cl := newTestClient(roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusBadGateway, "bad gateway"), nil
+	}))
+	_, err := cl.QueryHits(context.Background(), HitsQueryRequest{
+		Query: `app:="api"`,
+		Start: time.Now().Add(-time.Hour),
+		End:   time.Now(),
+		Step:  time.Minute,
+	})
+	if err == nil || !strings.Contains(err.Error(), "VL returned HTTP 502") {
+		t.Fatalf("QueryHits() error = %v, want HTTP status detail", err)
+	}
+}
+
+func TestFieldValuesNonOKStatus(t *testing.T) {
+	cl := newTestClient(roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusInternalServerError, "internal server error\n"), nil
+	}))
+	_, err := cl.FieldValues(context.Background(), FieldValuesRequest{FieldName: "app", Query: "*", Start: time.Now().Add(-time.Hour), End: time.Now()})
+	if err == nil {
+		t.Fatal("expected error for HTTP 500, got nil")
+	}
+}
+
+func TestDecodeErrors(t *testing.T) {
+	now := time.Now()
+
+	badJSON := roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusOK, "not json"), nil
+	})
+
+	if _, err := newTestClient(badJSON).FieldNames(context.Background(), FieldNamesRequest{Query: "*", Start: now.Add(-time.Hour), End: now}); err == nil {
+		t.Error("FieldNames: expected decode error for malformed JSON, got nil")
+	}
+	if _, err := newTestClient(badJSON).FieldValues(context.Background(), FieldValuesRequest{FieldName: "app", Query: "*", Start: now.Add(-time.Hour), End: now}); err == nil {
+		t.Error("FieldValues: expected decode error for malformed JSON, got nil")
+	}
+	if _, err := newTestClient(badJSON).QueryHits(context.Background(), HitsQueryRequest{Query: "*", Start: now.Add(-time.Hour), End: now, Step: time.Minute}); err == nil {
+		t.Error("QueryHits: expected decode error for malformed JSON, got nil")
 	}
 }
 
