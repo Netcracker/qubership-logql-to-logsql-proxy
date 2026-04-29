@@ -521,3 +521,61 @@ func TestQueryHitsSuccessAndErrors(t *testing.T) {
 		t.Fatal("expected timestamp parse error, got nil")
 	}
 }
+
+func TestFieldValuesWithLimit(t *testing.T) {
+	var gotQuery string
+	cl := newTestClient(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		gotQuery = req.URL.RawQuery
+		resp := map[string]any{"values": []map[string]any{{"value": "api", "hits": 10}}}
+		body, _ := json.Marshal(resp)
+		return jsonResponse(http.StatusOK, string(body)), nil
+	}))
+	values, err := cl.FieldValues(context.Background(), FieldValuesRequest{
+		FieldName: "app",
+		Query:     "*",
+		Start:     time.Now().Add(-time.Hour),
+		End:       time.Now(),
+		Limit:     25,
+	})
+	if err != nil {
+		t.Fatalf("FieldValues: %v", err)
+	}
+	if len(values) != 1 || values[0] != "api" {
+		t.Errorf("values = %v, want [api]", values)
+	}
+	if !strings.Contains(gotQuery, "limit=25") {
+		t.Errorf("query string %q does not contain limit=25", gotQuery)
+	}
+}
+
+func TestBuildRequestErrors(t *testing.T) {
+	// A URL containing a null byte is rejected by url.Parse and by
+	// http.NewRequestWithContext, exercising the "build X request" error paths.
+	badURL := "http://host\x00:9428"
+	rt := roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("should not reach transport")
+	})
+	cl := newTestClient(rt, func(c *config.VLogsConfig) { c.URL = badURL })
+	now := time.Now()
+
+	if err := cl.QueryLogs(context.Background(), LogQueryRequest{
+		Query: "*", Start: now.Add(-time.Hour), End: now,
+	}, func(Record) error { return nil }); err == nil {
+		t.Error("QueryLogs: expected build error, got nil")
+	}
+	if _, err := cl.QueryHits(context.Background(), HitsQueryRequest{
+		Query: "*", Start: now.Add(-time.Hour), End: now, Step: time.Minute,
+	}); err == nil {
+		t.Error("QueryHits: expected build error, got nil")
+	}
+	if _, err := cl.FieldNames(context.Background(), FieldNamesRequest{
+		Query: "*", Start: now.Add(-time.Hour), End: now,
+	}); err == nil {
+		t.Error("FieldNames: expected URL build error, got nil")
+	}
+	if _, err := cl.FieldValues(context.Background(), FieldValuesRequest{
+		FieldName: "app", Query: "*", Start: now.Add(-time.Hour), End: now,
+	}); err == nil {
+		t.Error("FieldValues: expected URL build error, got nil")
+	}
+}
