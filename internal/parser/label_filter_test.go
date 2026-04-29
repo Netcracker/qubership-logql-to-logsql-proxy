@@ -136,17 +136,17 @@ func TestPostfixByClauseAndLabelRemap(t *testing.T) {
 // successfully.
 func TestLabelFilterKubernetesLabels(t *testing.T) {
 	cases := []struct {
-		query       string
-		wantLogsQL  string
-		wantAggBy   string
+		query      string
+		wantLogsQL string
+		wantAggBy  string
 	}{
 		{
-			query: `sum by (labels.app.kubernetes.io/name) (count_over_time({namespace="ingress-nginx"} | labels.app.kubernetes.io/name!=""       [2s]))`,
+			query:      `sum by (labels.app.kubernetes.io/name) (count_over_time({namespace="ingress-nginx"} | labels.app.kubernetes.io/name!=""       [2s]))`,
 			wantLogsQL: `namespace:="ingress-nginx" AND NOT "labels.app.kubernetes.io/name":=""`,
 			wantAggBy:  "labels.app.kubernetes.io/name",
 		},
 		{
-			query: `sum by (labels.app.kubernetes.io/part-of) (count_over_time({namespace="ingress-nginx"} | labels.app.kubernetes.io/part-of!=""       [2s]))`,
+			query:      `sum by (labels.app.kubernetes.io/part-of) (count_over_time({namespace="ingress-nginx"} | labels.app.kubernetes.io/part-of!=""       [2s]))`,
 			wantLogsQL: `namespace:="ingress-nginx" AND NOT "labels.app.kubernetes.io/part-of":=""`,
 			wantAggBy:  "labels.app.kubernetes.io/part-of",
 		},

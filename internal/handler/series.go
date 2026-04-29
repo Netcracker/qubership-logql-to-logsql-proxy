@@ -62,7 +62,7 @@ func (d *Deps) Series(ctx *fasthttp.RequestCtx) {
 }
 
 // seriesFilter derives the LogsQL filter string from the first match[]
-// parameter in the request. If absent or unparseable, "*" (match-all) is used.
+// parameter in the request. If absent or unparsable, "*" (match-all) is used.
 func (d *Deps) seriesFilter(ctx *fasthttp.RequestCtx) string {
 	match := string(ctx.QueryArgs().Peek("match[]"))
 	if match == "" {
@@ -92,8 +92,7 @@ func isLargeOrCancelled(err error) bool {
 	if err == vlogs.ErrResponseTooLarge {
 		return true
 	}
-	switch err {
-	case nil:
+	if err == nil {
 		return false
 	}
 	// context.Canceled and context.DeadlineExceeded: treat partial result as OK.

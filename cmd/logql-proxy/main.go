@@ -109,12 +109,13 @@ func main() {
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Server.GracefulTimeout)
-	defer cancel()
 
 	if err := srv.ShutdownWithContext(ctx); err != nil {
+		cancel()
 		slog.Error("graceful shutdown failed", "err", err)
 		os.Exit(1)
 	}
+	cancel()
 
 	slog.Info("server stopped cleanly")
 }

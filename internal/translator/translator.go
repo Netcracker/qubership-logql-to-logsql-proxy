@@ -293,8 +293,10 @@ func remapNames(names []string, remap map[string]string) []string {
 func quoteLabelName(name string) string {
 	for i := 0; i < len(name); i++ {
 		ch := name[i]
-		if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
-			(ch >= '0' && ch <= '9') || ch == '_') {
+		if (ch < 'a' || ch > 'z') &&
+			(ch < 'A' || ch > 'Z') &&
+			(ch < '0' || ch > '9') &&
+			ch != '_' {
 			return `"` + strings.ReplaceAll(name, `"`, `\"`) + `"`
 		}
 	}

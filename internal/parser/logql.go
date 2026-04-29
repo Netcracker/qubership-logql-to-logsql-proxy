@@ -595,10 +595,7 @@ func (p *parser) parsePipeline() ([]PipelineStage, error) {
 					// Loki pipeline stages that drop/retain specific fields.
 					// VictoriaLogs does not have these fields (__error__,
 					// __error_details__, …) so we parse and discard the stage.
-					for {
-						if p.peek().typ != tokIDENT {
-							break
-						}
+					for p.peek().typ == tokIDENT {
 						p.consume() // field name
 						if p.peek().typ != tokCOMMA {
 							break
