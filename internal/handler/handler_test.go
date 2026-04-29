@@ -512,7 +512,9 @@ func TestLabelsFromStaticConfig(t *testing.T) {
 	defer closeRespBody(t, resp)
 
 	var body loki.LabelsResponse
-	_ = json.NewDecoder(resp.Body).Decode(&body)
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
 	if len(body.Data) != 2 {
 		t.Errorf("expected 2 known labels, got %d: %v", len(body.Data), body.Data)
 	}
@@ -907,7 +909,7 @@ func TestMetadataCacheHit(t *testing.T) {
 	defer cleanup()
 
 	url := addr + "/loki/api/v1/labels?start=1705320000&end=1705323600"
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		resp, _ := http.Get(url)
 		closeRespBody(t, resp)
 	}

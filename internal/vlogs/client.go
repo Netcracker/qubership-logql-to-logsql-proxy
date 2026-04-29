@@ -49,6 +49,8 @@ type Client struct {
 	maxB   int64 // MaxResponseBodyBytes, cached for convenience
 }
 
+// closeBody closes c, discarding the error. Errors from HTTP response body
+// Close are not actionable and would only clutter call sites.
 func closeBody(c io.Closer) {
 	_ = c.Close()
 }
