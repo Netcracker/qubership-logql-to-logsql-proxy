@@ -137,7 +137,7 @@ type rawLimitsConfig struct {
 	MaxConcurrentQueries  int   `yaml:"maxConcurrentQueries"`
 	MaxQueueDepth         int   `yaml:"maxQueueDepth"`
 	MaxResponseBodyBytes  int64 `yaml:"maxResponseBodyBytes"`
-	MaxStreamsPerResponse  int   `yaml:"maxStreamsPerResponse"`
+	MaxStreamsPerResponse int   `yaml:"maxStreamsPerResponse"`
 	MaxMemoryMB           int64 `yaml:"maxMemoryMB"`
 	MaxQueryRangeHours    int   `yaml:"maxQueryRangeHours"`
 	MaxLimit              int   `yaml:"maxLimit"`

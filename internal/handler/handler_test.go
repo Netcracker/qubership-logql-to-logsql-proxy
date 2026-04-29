@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/valyala/fasthttp"
+	"github.com/valyala/fasthttp/fasthttputil"
 
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/config"
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/handler"
@@ -97,18 +98,34 @@ func buildHandler(deps *handler.Deps) fasthttp.RequestHandler {
 	return deps.BuildHandler()
 }
 
-// newTestServer starts a real fasthttp server on an ephemeral localhost port and
-// returns its base URL and a cleanup function. Tests use the standard http.Get /
-// http.Client to send requests, exactly as in production.
+// newTestServer serves requests through a fasthttp in-memory listener and
+// temporarily redirects the default net/http transport to it. This keeps the
+// existing http.Get-based tests intact without requiring OS-level sockets.
 func newTestServer(t *testing.T, h fasthttp.RequestHandler) (string, func()) {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("net.Listen: %v", err)
-	}
+	ln := fasthttputil.NewInmemoryListener()
 	srv := &fasthttp.Server{Handler: h}
 	go func() { _ = srv.Serve(ln) }()
-	return "http://" + ln.Addr().String(), func() { _ = srv.Shutdown() }
+
+	prevTransport := http.DefaultTransport
+	http.DefaultTransport = &http.Transport{
+		DialContext: func(context.Context, string, string) (net.Conn, error) {
+			return ln.Dial()
+		},
+	}
+
+	return "http://inmemory.local", func() {
+		http.DefaultTransport = prevTransport
+		_ = srv.Shutdown()
+		_ = ln.Close()
+	}
+}
+
+func closeRespBody(t *testing.T, resp *http.Response) {
+	t.Helper()
+	if err := resp.Body.Close(); err != nil {
+		t.Fatalf("close response body: %v", err)
+	}
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -123,7 +140,7 @@ func TestReady(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /ready: %v", err)
 	}
-	defer resp.Body.Close()
+	defer closeRespBody(t, resp)
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want 200", resp.StatusCode)
 	}
@@ -148,7 +165,7 @@ func TestQueryRangeSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
-	defer resp.Body.Close()
+	defer closeRespBody(t, resp)
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
@@ -180,7 +197,7 @@ func TestQueryRangeMissingQuery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
-	defer resp.Body.Close()
+	defer closeRespBody(t, resp)
 
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", resp.StatusCode)
@@ -196,7 +213,7 @@ func TestQueryRangeBadLogQL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
-	defer resp.Body.Close()
+	defer closeRespBody(t, resp)
 
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", resp.StatusCode)
@@ -213,7 +230,7 @@ func TestQueryRangeUnsupportedConstruct(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
-	defer resp.Body.Close()
+	defer closeRespBody(t, resp)
 
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", resp.StatusCode)
@@ -241,7 +258,7 @@ func TestQueryRangeNanosecondTimestamps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
-	defer resp.Body.Close()
+	defer closeRespBody(t, resp)
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("nanosecond timestamps: status = %d, want 200 (got misinterpreted as seconds?)", resp.StatusCode)
@@ -264,7 +281,7 @@ func TestQueryRangeMillisecondTimestamps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
-	defer resp.Body.Close()
+	defer closeRespBody(t, resp)
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("millisecond timestamps: status = %d, want 200", resp.StatusCode)
@@ -283,7 +300,7 @@ func TestQueryRangeTimeRangeExceeded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
-	defer resp.Body.Close()
+	defer closeRespBody(t, resp)
 
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", resp.StatusCode)
@@ -300,7 +317,7 @@ func TestQueryRangeVLError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
-	defer resp.Body.Close()
+	defer closeRespBody(t, resp)
 
 	if resp.StatusCode != http.StatusBadGateway {
 		t.Errorf("status = %d, want 502", resp.StatusCode)
@@ -331,7 +348,7 @@ func TestQueryRangeMetricCountOverTime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
-	defer resp.Body.Close()
+	defer closeRespBody(t, resp)
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
@@ -375,7 +392,7 @@ func TestQueryRangeAggregationSumBy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
-	defer resp.Body.Close()
+	defer closeRespBody(t, resp)
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
@@ -432,7 +449,7 @@ func TestQueryRangeAggregationSumNoBy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
-	defer resp.Body.Close()
+	defer closeRespBody(t, resp)
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
@@ -467,7 +484,7 @@ func TestLabelsSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
-	defer resp.Body.Close()
+	defer closeRespBody(t, resp)
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
@@ -492,10 +509,12 @@ func TestLabelsFromStaticConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
-	defer resp.Body.Close()
+	defer closeRespBody(t, resp)
 
 	var body loki.LabelsResponse
-	_ = json.NewDecoder(resp.Body).Decode(&body)
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
 	if len(body.Data) != 2 {
 		t.Errorf("expected 2 known labels, got %d: %v", len(body.Data), body.Data)
 	}
@@ -517,7 +536,7 @@ func TestDetectedLabelsSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
-	defer resp.Body.Close()
+	defer closeRespBody(t, resp)
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
@@ -547,7 +566,7 @@ func TestDetectedLabelsFromStaticConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
-	defer resp.Body.Close()
+	defer closeRespBody(t, resp)
 
 	var body loki.DetectedLabelsData
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
@@ -574,7 +593,7 @@ func TestLabelValuesSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
-	defer resp.Body.Close()
+	defer closeRespBody(t, resp)
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
@@ -607,7 +626,7 @@ func TestSeriesSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
-	defer resp.Body.Close()
+	defer closeRespBody(t, resp)
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
@@ -645,7 +664,7 @@ func TestConcurrencyLimitReturns429(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
-	defer resp.Body.Close()
+	defer closeRespBody(t, resp)
 
 	if resp.StatusCode != http.StatusTooManyRequests {
 		t.Errorf("status = %d, want 429", resp.StatusCode)
@@ -667,7 +686,7 @@ func TestIndexStatsStub(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
-	defer resp.Body.Close()
+	defer closeRespBody(t, resp)
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want 200", resp.StatusCode)
@@ -706,7 +725,7 @@ func TestIndexVolumeEmptyResult(t *testing.T) {
 		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 			t.Fatalf("%s: decode: %v", path, err)
 		}
-		resp.Body.Close()
+		closeRespBody(t, resp)
 
 		if body.Status != "success" {
 			t.Errorf("%s: status = %q, want success", path, body.Status)
@@ -736,7 +755,7 @@ func TestIndexVolumeWithQuery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
-	defer resp.Body.Close()
+	defer closeRespBody(t, resp)
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
@@ -795,7 +814,7 @@ func TestIndexVolumeMultiLabelGrouping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
-	defer resp.Body.Close()
+	defer closeRespBody(t, resp)
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
@@ -830,7 +849,7 @@ func TestIndexVolumeVLError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
-	defer resp.Body.Close()
+	defer closeRespBody(t, resp)
 
 	if resp.StatusCode != http.StatusBadGateway {
 		t.Errorf("status = %d, want 502", resp.StatusCode)
@@ -846,7 +865,7 @@ func TestIndexVolumeBadQuery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
-	defer resp.Body.Close()
+	defer closeRespBody(t, resp)
 
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", resp.StatusCode)
@@ -865,7 +884,7 @@ func TestDrilldownLimitsStub(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /loki/api/v1/drilldown-limits: %v", err)
 	}
-	defer resp.Body.Close()
+	defer closeRespBody(t, resp)
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want 200", resp.StatusCode)
@@ -890,9 +909,9 @@ func TestMetadataCacheHit(t *testing.T) {
 	defer cleanup()
 
 	url := addr + "/loki/api/v1/labels?start=1705320000&end=1705323600"
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		resp, _ := http.Get(url)
-		resp.Body.Close()
+		closeRespBody(t, resp)
 	}
 
 	// All three requests land in the same minute bucket; only the first should
