@@ -116,8 +116,8 @@ flowchart TD
 - [ ] Improve logs to show original errors
 - [ ] Measure performance and resource usage
 - [ ] Check the logql-to-logsql translator:
-  [https://github.com/VictoriaMetrics-community/logql-to-logsql/](https://github.com/VictoriaMetrics-community/logql-to-logsql/)
-  and maybe reuse it
+      [https://github.com/VictoriaMetrics-community/logql-to-logsql/](https://github.com/VictoriaMetrics-community/logql-to-logsql/)
+      and maybe reuse it
 
 ### Known issues
 
