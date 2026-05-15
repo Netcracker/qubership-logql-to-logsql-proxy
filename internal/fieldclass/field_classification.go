@@ -102,10 +102,7 @@ func ShouldExposeDetectedField(name string, cfg config.LabelsConfig) bool {
 	case FieldClassLabel, FieldClassExcluded:
 		return false
 	}
-	if IsSuppressedDetectedFieldName(name) {
-		return false
-	}
-	return true
+	return !IsSuppressedDetectedFieldName(name)
 }
 
 func IsSuppressedDetectedFieldName(name string) bool {
