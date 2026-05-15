@@ -44,6 +44,9 @@ func TestLoadAppliesDefaultsFileEnvAndPasswordFile(t *testing.T) {
 
 	t.Setenv("PROXY_SERVER_LISTENADDR", ":9999")
 	t.Setenv("PROXY_LABELS_KNOWNLABELS", " app , team,, env ")
+	t.Setenv("PROXY_LABELS_KNOWNPARSEDFIELDS", " parse_format , parse_status ")
+	t.Setenv("PROXY_LABELS_KNOWNSTRUCTUREDMETADATA", " labels.component , labels.tier ")
+	t.Setenv("PROXY_LABELS_EXCLUDEDFIELDS", " _msg , _time ")
 	t.Setenv("PROXY_LOG_LEVEL", "debug")
 
 	cfg, err := Load(cfgFile.Name())
@@ -75,6 +78,15 @@ func TestLoadAppliesDefaultsFileEnvAndPasswordFile(t *testing.T) {
 	if got := cfg.Labels.KnownLabels; len(got) != 3 || got[0] != "app" || got[1] != "team" || got[2] != "env" {
 		t.Errorf("KnownLabels = %v, want [app team env]", got)
 	}
+	if got := cfg.Labels.KnownParsedFields; len(got) != 2 || got[0] != "parse_format" || got[1] != "parse_status" {
+		t.Errorf("KnownParsedFields = %v, want [parse_format parse_status]", got)
+	}
+	if got := cfg.Labels.KnownStructuredMetadata; len(got) != 2 || got[0] != "labels.component" || got[1] != "labels.tier" {
+		t.Errorf("KnownStructuredMetadata = %v, want [labels.component labels.tier]", got)
+	}
+	if got := cfg.Labels.ExcludedFields; len(got) != 2 || got[0] != "_msg" || got[1] != "_time" {
+		t.Errorf("ExcludedFields = %v, want [_msg _time]", got)
+	}
 	if cfg.Log.Level != "debug" {
 		t.Errorf("Log.Level = %q, want %q", cfg.Log.Level, "debug")
 	}
@@ -104,6 +116,44 @@ func TestLoadReturnsConversionErrorForInvalidDuration(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `server.readTimeout: invalid duration "nope"`) {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadUsesCuratedKnownLabelsByDefault(t *testing.T) {
+	cfgFile, err := os.CreateTemp(t.TempDir(), "config-*.yaml")
+	if err != nil {
+		t.Fatalf("CreateTemp(config): %v", err)
+	}
+	if _, err := cfgFile.WriteString("vlogs:\n  url: http://victorialogs:9428\n"); err != nil {
+		t.Fatalf("WriteString(config): %v", err)
+	}
+	if err := cfgFile.Close(); err != nil {
+		t.Fatalf("Close(config): %v", err)
+	}
+
+	cfg, err := Load(cfgFile.Name())
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+
+	want := []string{"service_name", "detected_level", "namespace", "container", "pod", "nodename", "hostname"}
+	got := cfg.Labels.KnownLabels
+	if len(got) != len(want) {
+		t.Fatalf("KnownLabels len = %d, want %d (%v)", len(got), len(want), want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("KnownLabels = %v, want %v", got, want)
+		}
+	}
+	if len(cfg.Labels.KnownParsedFields) == 0 {
+		t.Fatal("expected KnownParsedFields defaults to be populated")
+	}
+	if len(cfg.Labels.KnownStructuredMetadata) == 0 {
+		t.Fatal("expected KnownStructuredMetadata defaults to be populated")
+	}
+	if len(cfg.Labels.ExcludedFields) == 0 {
+		t.Fatal("expected ExcludedFields defaults to be populated")
 	}
 }
 

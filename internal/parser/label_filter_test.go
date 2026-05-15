@@ -23,12 +23,12 @@ func TestDropStage(t *testing.T) {
 		{
 			name:       "log query with drop",
 			query:      `{namespace="ingress-nginx"} | json | logfmt | drop __error__, __error_details__`,
-			wantLogsQL: `namespace:="ingress-nginx" | unpack_logfmt`,
+			wantLogsQL: `namespace:="ingress-nginx"`,
 		},
 		{
 			name:       "sum without by, drop stage",
 			query:      `sum(count_over_time({namespace="ingress-nginx"} | json | logfmt | drop __error__, __error_details__ [900s]))`,
-			wantLogsQL: `namespace:="ingress-nginx" | unpack_logfmt`,
+			wantLogsQL: `namespace:="ingress-nginx"`,
 		},
 		{
 			name:       "keep stage",

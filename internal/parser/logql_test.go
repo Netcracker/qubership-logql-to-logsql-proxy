@@ -153,6 +153,19 @@ func TestParseJSONStage(t *testing.T) {
 	}
 }
 
+func TestParseJSONStageWithFieldAssignment(t *testing.T) {
+	lq := asLogQuery(t, mustParse(t, "{service_name!~\"istiod\"} |= `` | json file=\"controller.go:481\""))
+	if len(lq.Pipeline) != 2 {
+		t.Fatalf("expected 2 pipeline stages, got %d", len(lq.Pipeline))
+	}
+	if lf, ok := lq.Pipeline[0].(*parser.LineFilter); !ok || lf.Op != parser.Contains || lf.Value != "" {
+		t.Fatalf("pipeline[0] = %#v, want empty contains line filter", lq.Pipeline[0])
+	}
+	if _, ok := lq.Pipeline[1].(*parser.JSONParser); !ok {
+		t.Fatalf("pipeline[1] = %#v, want *JSONParser", lq.Pipeline[1])
+	}
+}
+
 func TestParseLogfmtStage(t *testing.T) {
 	lq := asLogQuery(t, mustParse(t, `{app="api"} | logfmt`))
 	if len(lq.Pipeline) != 1 {
@@ -160,6 +173,19 @@ func TestParseLogfmtStage(t *testing.T) {
 	}
 	if _, ok := lq.Pipeline[0].(*parser.LogfmtParser); !ok {
 		t.Errorf("expected *LogfmtParser, got %T", lq.Pipeline[0])
+	}
+}
+
+func TestParseLogfmtStageWithStrictFlag(t *testing.T) {
+	lq := asLogQuery(t, mustParse(t, "{service_name!~\"istiod\"} |= `` | logfmt --strict"))
+	if len(lq.Pipeline) != 2 {
+		t.Fatalf("expected 2 pipeline stages, got %d", len(lq.Pipeline))
+	}
+	if lf, ok := lq.Pipeline[0].(*parser.LineFilter); !ok || lf.Op != parser.Contains || lf.Value != "" {
+		t.Fatalf("pipeline[0] = %#v, want empty contains line filter", lq.Pipeline[0])
+	}
+	if _, ok := lq.Pipeline[1].(*parser.LogfmtParser); !ok {
+		t.Fatalf("pipeline[1] = %#v, want *LogfmtParser", lq.Pipeline[1])
 	}
 }
 
@@ -222,6 +248,17 @@ func TestParseBacktickLineFilter(t *testing.T) {
 	}
 	if lf.Op != parser.Contains || lf.Value != "error" {
 		t.Errorf("got LineFilter %+v, want {Op:Contains Value:error}", lf)
+	}
+}
+
+func TestParsePatternFilter(t *testing.T) {
+	lq := asLogQuery(t, mustParse(t, `{level="warning"} |> "addr <IP4>:<N>"`))
+	lf, ok := lq.Pipeline[0].(*parser.LineFilter)
+	if !ok {
+		t.Fatalf("expected *LineFilter, got %T", lq.Pipeline[0])
+	}
+	if lf.Op != parser.Pattern || lf.Value != "addr <IP4>:<N>" {
+		t.Errorf("got LineFilter %+v, want {Op:Pattern Value:addr <IP4>:<N>}", lf)
 	}
 }
 
@@ -323,17 +360,18 @@ func TestParseErrorMissingBrace(t *testing.T) {
 	}
 }
 
-func TestParseUnsupportedConstruct(t *testing.T) {
-	_, err := parser.Parse(`{app="api"} | line_format "{{.msg}}"`)
-	if err == nil {
-		t.Fatal("expected error for unsupported construct, got nil")
+func TestParseLineFormatAndPatternHints(t *testing.T) {
+	q, err := parser.Parse(`{app="api"} |> "<_> periodic dashboard resync" | pattern "<field_1> periodic dashboard resync" | keep field_1 | line_format ""`)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
 	}
-	var ue *parser.UnsupportedError
-	if !errors.As(err, &ue) {
-		t.Errorf("expected *UnsupportedError, got %T: %v", err, err)
+	lq := asLogQuery(t, q)
+	if len(lq.Pipeline) != 1 {
+		t.Fatalf("pipeline len = %d, want 1 effective stage", len(lq.Pipeline))
 	}
-	if ue.Construct != "| line_format" {
-		t.Errorf("expected construct %q, got %q", "| line_format", ue.Construct)
+	lf, ok := lq.Pipeline[0].(*parser.LineFilter)
+	if !ok || lf.Op != parser.Pattern {
+		t.Fatalf("pipeline[0] = %#v, want pattern line filter", lq.Pipeline[0])
 	}
 }
 

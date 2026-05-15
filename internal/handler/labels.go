@@ -6,6 +6,8 @@ import (
 
 	"github.com/valyala/fasthttp"
 
+	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/config"
+	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/fieldclass"
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/loki"
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/parser"
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/translator"
@@ -14,10 +16,12 @@ import (
 
 // Labels handles GET /loki/api/v1/labels.
 //
-// Returns the list of indexed field names from VictoriaLogs, which Grafana
-// uses to populate the label selector. Results are cached per time-range
-// bucket (rounded to the nearest minute) to reduce VL load during the
-// frequent polls that Grafana Logs Drilldown performs.
+// Returns the label allowlist exposed to Grafana. By default the proxy uses a
+// small curated set of high-signal labels for Logs Drilldown; when
+// Labels.KnownLabels is empty it falls back to indexed field names discovered
+// from VictoriaLogs. Results are cached per time-range bucket (rounded to the
+// nearest minute) to reduce VL load during the frequent polls that Grafana
+// Logs Drilldown performs.
 //
 // If Labels.KnownLabels is set in config, the static list is returned
 // immediately without querying VictoriaLogs or the cache.
@@ -68,8 +72,8 @@ func (d *Deps) Labels(ctx *fasthttp.RequestCtx) {
 // Grafana Logs Drilldown calls this endpoint (instead of /labels) to discover
 // which label names are present in the selected time range. The Loki response
 // shape is different — it wraps names in a "detectedLabels" array with a
-// per-label cardinality count — but the underlying data source is the same VL
-// field_names query used by /labels.
+// per-label cardinality count — but it uses the same curated allowlist or VL
+// fallback strategy as /labels.
 //
 // VictoriaLogs does not expose per-label cardinality, so every entry reports
 // cardinality 0. Grafana Logs Drilldown only uses the label names, so this is
@@ -149,7 +153,7 @@ func (d *Deps) DetectedFields(ctx *fasthttp.RequestCtx) {
 	}
 
 	queryStr := string(ctx.QueryArgs().Peek("query"))
-	logsqlFilter := bestEffortLogsQLFilter(queryStr, translator.Options{LabelRemap: d.Cfg.Labels.LabelRemap})
+	logsqlFilter := selectorOnlyLogsQLFilter(queryStr, translator.Options{LabelRemap: d.Cfg.Labels.LabelRemap})
 
 	names, err := d.VL.FieldNames(reqContext(ctx), vlogs.FieldNamesRequest{
 		Query: logsqlFilter,
@@ -163,12 +167,40 @@ func (d *Deps) DetectedFields(ctx *fasthttp.RequestCtx) {
 		return
 	}
 
+	names = filterDetectedFieldNames(names, d.Cfg.Labels)
 	fields := make([]loki.DetectedField, len(names))
 	for i, name := range names {
 		fields[i] = loki.DetectedField{Label: name, Type: "string"}
 	}
 
 	writeJSON(ctx, fasthttp.StatusOK, loki.DetectedFieldsResponse{Fields: fields})
+}
+
+// selectorOnlyLogsQLFilter converts only the stream selector portion of a
+// LogQL query to LogsQL. This is intentionally stricter than
+// bestEffortLogsQLFilter for detected_fields: Grafana often appends `| json`
+// and `| logfmt`, and applying `unpack_logfmt` to plain-text logs can create
+// garbage pseudo-fields such as random words from the message body. For field
+// discovery we want the indexed fields of the selected stream set, not fields
+// dynamically unpacked from arbitrary message text.
+func selectorOnlyLogsQLFilter(queryStr string, opts translator.Options) string {
+	if queryStr == "" {
+		return "*"
+	}
+
+	selector := extractStreamSelector(queryStr)
+	if selector == "" {
+		return "*"
+	}
+	ast, err := parser.Parse(selector)
+	if err != nil {
+		return "*"
+	}
+	result, err := translator.Translate(ast, opts)
+	if err != nil {
+		return "*"
+	}
+	return result.LogsQL
 }
 
 // bestEffortLogsQLFilter converts a LogQL query string to a LogsQL filter on a
@@ -226,4 +258,25 @@ func extractStreamSelector(s string) string {
 		}
 	}
 	return ""
+}
+
+func filterDetectedFieldNames(names []string, cfg config.LabelsConfig) []string {
+	if len(names) == 0 {
+		return nil
+	}
+
+	out := make([]string, 0, len(names))
+	seen := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		if !fieldclass.ShouldExposeDetectedField(name, cfg) {
+			continue
+		}
+		if _, dup := seen[name]; dup {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	fieldclass.SortDetectedFieldNames(out, cfg)
+	return out
 }

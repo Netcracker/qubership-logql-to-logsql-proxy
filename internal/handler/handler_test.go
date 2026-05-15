@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -75,6 +76,9 @@ func defaultConfig() *config.Config {
 	cfg.Limits.MaxQueryRangeHours = 24
 	cfg.Limits.MaxLimit = 5000
 	cfg.Limits.DefaultLimit = 1000
+	cfg.Labels.KnownParsedFields = []string{"parse_format", "parse_status", "file", "source_level", "klog_date", "date", "pid"}
+	cfg.Labels.KnownStructuredMetadata = []string{"labels.component", "labels.tier", "log_category"}
+	cfg.Labels.ExcludedFields = []string{"_msg", "_time", "_stream", "_stream_id"}
 	cfg.Labels.MetadataCacheTTL = 5 * time.Minute
 	cfg.Labels.MetadataCacheSize = 256
 	cfg.Log.Level = "info"
@@ -307,6 +311,24 @@ func TestQueryRangeTimeRangeExceeded(t *testing.T) {
 	}
 }
 
+func TestQueryRangeRejectsPartialHourRangeAboveLimit(t *testing.T) {
+	deps := newDeps(&mockVL{})
+	deps.Cfg.Limits.MaxQueryRangeHours = 24
+	addr, cleanup := newTestServer(t, buildHandler(deps))
+	defer cleanup()
+
+	resp, err := http.Get(addr +
+		"/loki/api/v1/query_range?query={}&start=1705320000&end=1705409940")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer closeRespBody(t, resp)
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
 func TestQueryRangeVLError(t *testing.T) {
 	vl := &mockVL{queryLogsErr: &testVLError{}}
 	addr, cleanup := newTestServer(t, buildHandler(newDeps(vl)))
@@ -477,7 +499,9 @@ func TestQueryRangeAggregationSumNoBy(t *testing.T) {
 
 func TestLabelsSuccess(t *testing.T) {
 	vl := &mockVL{fieldNames: []string{"app", "level", "host"}}
-	addr, cleanup := newTestServer(t, buildHandler(newDeps(vl)))
+	deps := newDeps(vl)
+	deps.Cfg.Labels.KnownLabels = nil
+	addr, cleanup := newTestServer(t, buildHandler(deps))
 	defer cleanup()
 
 	resp, err := http.Get(addr + "/loki/api/v1/labels?start=1705320000&end=1705323600")
@@ -529,7 +553,9 @@ func TestLabelsFromStaticConfig(t *testing.T) {
 
 func TestDetectedLabelsSuccess(t *testing.T) {
 	vl := &mockVL{fieldNames: []string{"app", "level", "host"}}
-	addr, cleanup := newTestServer(t, buildHandler(newDeps(vl)))
+	deps := newDeps(vl)
+	deps.Cfg.Labels.KnownLabels = nil
+	addr, cleanup := newTestServer(t, buildHandler(deps))
 	defer cleanup()
 
 	resp, err := http.Get(addr + "/loki/api/v1/detected_labels?start=1705320000&end=1705323600")
@@ -798,6 +824,46 @@ func TestIndexVolumeWithQuery(t *testing.T) {
 	}
 }
 
+func TestIndexVolumeSynthesizesServiceNameFromFallbackFields(t *testing.T) {
+	vl := &mockVL{
+		queryLogsRecs: []vlogs.Record{
+			{"_time": "2024-01-15T12:00:00Z", "_msg": "r1", "labels.app.kubernetes.io/name": "frontend"},
+			{"_time": "2024-01-15T12:00:01Z", "_msg": "r2", "labels.app.kubernetes.io/name": "frontend"},
+			{"_time": "2024-01-15T12:00:02Z", "_msg": "r3", "container": "backend"},
+		},
+	}
+	addr, cleanup := newTestServer(t, buildHandler(newDeps(vl)))
+	defer cleanup()
+
+	resp, err := http.Get(addr +
+		`/loki/api/v1/index/volume?query={service_name=~".+"}&start=1705320000&end=1705323600`)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer closeRespBody(t, resp)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	var body loki.IndexVolumeResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Data.Result) != 2 {
+		t.Fatalf("expected 2 result entries, got %d", len(body.Data.Result))
+	}
+
+	first := body.Data.Result[0]
+	if first.Metric["service_name"] != "frontend" {
+		t.Errorf("first entry service_name = %q, want frontend", first.Metric["service_name"])
+	}
+	second := body.Data.Result[1]
+	if second.Metric["service_name"] != "backend" {
+		t.Errorf("second entry service_name = %q, want backend", second.Metric["service_name"])
+	}
+}
+
 func TestIndexVolumeMultiLabelGrouping(t *testing.T) {
 	vl := &mockVL{
 		queryLogsRecs: []vlogs.Record{
@@ -891,6 +957,43 @@ func TestDrilldownLimitsStub(t *testing.T) {
 	}
 	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "application/json") {
 		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	limits, ok := body["limits"].(map[string]any)
+	if !ok {
+		t.Fatalf("limits missing or wrong type: %#v", body["limits"])
+	}
+	namesRaw, ok := limits["discover_service_name"].([]any)
+	if !ok {
+		t.Fatalf("discover_service_name missing or wrong type: %#v", limits["discover_service_name"])
+	}
+
+	names := make([]string, 0, len(namesRaw))
+	for _, v := range namesRaw {
+		s, ok := v.(string)
+		if !ok {
+			t.Fatalf("discover_service_name entry has wrong type: %#v", v)
+		}
+		names = append(names, s)
+	}
+
+	for _, want := range []string{
+		"labels.app.kubernetes.io/name",
+		"k8s.deployment.name",
+		"container",
+		"service_name",
+	} {
+		if !slices.Contains(names, want) {
+			t.Errorf("discover_service_name missing %q: %v", want, names)
+		}
+	}
+	if len(names) == 0 || names[0] != "labels.app.kubernetes.io/name" {
+		t.Errorf("discover_service_name[0] = %q, want %q", names[0], "labels.app.kubernetes.io/name")
 	}
 }
 

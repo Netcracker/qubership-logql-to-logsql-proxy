@@ -13,25 +13,26 @@ import (
 type tokenType int
 
 const (
-	tokILLEGAL  tokenType = iota
-	tokEOF                // end of input
-	tokLBRACE             // {
-	tokRBRACE             // }
-	tokLPAREN             // (
-	tokRPAREN             // )
-	tokLBRACKET           // [
-	tokRBRACKET           // ]
-	tokCOMMA              // ,
-	tokIDENT              // identifier / keyword
-	tokSTRING             // "double-quoted string" (value is the unquoted content)
-	tokEQ                 // =
-	tokNEQ                // !=
-	tokRE                 // =~
-	tokNRE                // !~
-	tokPIPE_EQ            // |=  (line-filter contains)
-	tokPIPE_RE            // |~  (line-filter regex)
-	tokPIPE               // |
-	tokDURATION           // e.g. 5m, 1h30m
+	tokILLEGAL      tokenType = iota
+	tokEOF                    // end of input
+	tokLBRACE                 // {
+	tokRBRACE                 // }
+	tokLPAREN                 // (
+	tokRPAREN                 // )
+	tokLBRACKET               // [
+	tokRBRACKET               // ]
+	tokCOMMA                  // ,
+	tokIDENT                  // identifier / keyword
+	tokSTRING                 // "double-quoted string" (value is the unquoted content)
+	tokEQ                     // =
+	tokNEQ                    // !=
+	tokRE                     // =~
+	tokNRE                    // !~
+	tokPIPE_EQ                // |=  (line-filter contains)
+	tokPIPE_RE                // |~  (line-filter regex)
+	tokPIPE_PATTERN           // |>  (pattern filter)
+	tokPIPE                   // |
+	tokDURATION               // e.g. 5m, 1h30m
 )
 
 type token struct {
@@ -122,6 +123,9 @@ func (l *lexer) next() token {
 		case '~':
 			l.pos += 2
 			return token{tokPIPE_RE, "|~", pos}
+		case '>':
+			l.pos += 2
+			return token{tokPIPE_PATTERN, "|>", pos}
 		}
 		l.pos++
 		return token{tokPIPE, "|", pos}
@@ -504,8 +508,11 @@ func (p *parser) parseLabelMatcher() (LabelMatcher, error) {
 //	               | "!=" STRING       (not-contains)
 //	               | "|~" STRING       (regex)
 //	               | "!~" STRING       (not-regex)
+//	               | "|>" STRING       (pattern match)
 //	               | "|" "json"
-//	               | "|" IDENT         (unsupported → UnsupportedError)
+//	               | "|" "pattern" STRING        (accepted as hint/no-op)
+//	               | "|" "line_format" STRING    (accepted as hint/no-op)
+//	               | "|" IDENT                   (unsupported → UnsupportedError)
 //
 // ────────────────────────────────────────────────────────────────────────────
 func (p *parser) parsePipeline() ([]PipelineStage, error) {
@@ -534,6 +541,14 @@ func (p *parser) parsePipeline() ([]PipelineStage, error) {
 				return nil, err
 			}
 			stages = append(stages, &LineFilter{Op: Regex, Value: v})
+
+		case tokPIPE_PATTERN:
+			p.consume()
+			v, err := p.expectString(tok)
+			if err != nil {
+				return nil, err
+			}
+			stages = append(stages, &LineFilter{Op: Pattern, Value: v})
 
 		case tokNEQ:
 			p.consume()
@@ -588,8 +603,18 @@ func (p *parser) parsePipeline() ([]PipelineStage, error) {
 				switch identTok.val {
 				case "json":
 					stages = append(stages, &JSONParser{})
+					if err := p.parseOptionalStageAssignments("json"); err != nil {
+						return nil, err
+					}
 				case "logfmt":
 					stages = append(stages, &LogfmtParser{})
+					if err := p.parseOptionalStageFlags("logfmt"); err != nil {
+						return nil, err
+					}
+				case "pattern", "line_format":
+					if _, err := p.expectString(identTok); err != nil {
+						return nil, err
+					}
 				case "drop", "keep":
 					// "| drop field1, field2" and "| keep field1, field2" are
 					// Loki pipeline stages that drop/retain specific fields.
@@ -613,10 +638,77 @@ func (p *parser) parsePipeline() ([]PipelineStage, error) {
 		default:
 			return nil, &ParseError{
 				Pos: tok.pos,
-				Msg: fmt.Sprintf("unexpected token %q in pipeline (expected |=, !=, |~, !~, | json/logfmt/drop/keep, or end of query)", tok.val),
+				Msg: fmt.Sprintf("unexpected token %q in pipeline (expected |=, !=, |~, !~, |>, | json/logfmt/drop/keep, or end of query)", tok.val),
 			}
 		}
 	}
+}
+
+// parseOptionalStageFlags consumes optional CLI-style stage flags such as
+// `--strict` after stages like `| logfmt`. Grafana Explore may emit these
+// hints, but they do not currently affect translation, so they are accepted
+// and ignored for compatibility.
+func (p *parser) parseOptionalStageFlags(stageName string) error {
+	for {
+		first := p.peek()
+		if first.typ != tokILLEGAL || first.val != "-" {
+			return nil
+		}
+		p.consume()
+
+		second := p.consume()
+		if second.typ != tokILLEGAL || second.val != "-" {
+			return &ParseError{
+				Pos: second.pos,
+				Msg: fmt.Sprintf("expected %q after %q in %s stage flag", "-", first.val, stageName),
+			}
+		}
+
+		flagTok := p.consume()
+		if flagTok.typ != tokIDENT {
+			return &ParseError{
+				Pos: flagTok.pos,
+				Msg: fmt.Sprintf("expected flag name after -- in %s stage, got %q", stageName, flagTok.val),
+			}
+		}
+	}
+}
+
+// parseOptionalStageAssignments consumes optional stage arguments such as
+// `file="controller.go:481"` after parser stages like `| json`. Grafana
+// Explore may emit these parser hints; the proxy currently doesn't translate
+// them, so they are accepted and ignored for compatibility.
+func (p *parser) parseOptionalStageAssignments(stageName string) error {
+	for {
+		nameTok := p.peek()
+		if nameTok.typ != tokIDENT {
+			return nil
+		}
+
+		switch next := p.peekAhead(); next.typ {
+		case tokEQ, tokNEQ, tokRE, tokNRE:
+			p.consume() // field name
+			p.consume() // operator
+			if _, err := p.expectString(nameTok); err != nil {
+				return err
+			}
+		default:
+			return nil
+		}
+	}
+}
+
+// peekAhead returns the token after the next token without consuming either.
+func (p *parser) peekAhead() token {
+	savedPos := p.lex.pos
+	savedPeeked := p.peeked
+
+	_ = p.consume()
+	second := p.peek()
+
+	p.lex.pos = savedPos
+	p.peeked = savedPeeked
+	return second
 }
 
 // expectString consumes a STRING token and returns its value, or an error.

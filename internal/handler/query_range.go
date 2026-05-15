@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,6 +18,10 @@ import (
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/translator"
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/vlogs"
 )
+
+var drilldownPatternStatsRe = regexp.MustCompile("(?i)\\|\\s*pattern\\s*([`\"].*?[`\"])" +
+	"\\s*\\|\\s*keep\\s+([A-Za-z0-9_./-]+)" +
+	"\\s*\\|\\s*line_format\\s*\"\"")
 
 // QueryRange handles GET /loki/api/v1/query_range.
 //
@@ -52,11 +57,16 @@ func (d *Deps) handleQuery(ctx *fasthttp.RequestCtx, instant bool) {
 	// Loki datasource connection. It is not valid LogQL; return a minimal
 	// success response so the datasource health check passes.
 	if isVectorExpr(queryStr) {
-		writeJSON(ctx, fasthttp.StatusOK, loki.MatrixResponse{
+		writeJSON(ctx, fasthttp.StatusOK, loki.VectorResponse{
 			Status: "success",
-			Data: loki.MatrixData{
+			Data: loki.VectorData{
 				ResultType: "vector",
-				Result:     []loki.MatrixSeries{},
+				Result: []loki.VectorSample{
+					{
+						Metric: map[string]string{},
+						Value:  []interface{}{float64(time.Now().Unix()), "2"},
+					},
+				},
 			},
 		})
 		return
@@ -91,7 +101,7 @@ func (d *Deps) handleQuery(ctx *fasthttp.RequestCtx, instant bool) {
 	}
 
 	// Reject queries that span more than MaxQueryRangeHours.
-	if int(end.Sub(start).Hours()) > d.Cfg.Limits.MaxQueryRangeHours {
+	if end.Sub(start) > time.Duration(d.Cfg.Limits.MaxQueryRangeHours)*time.Hour {
 		writeError(ctx, fasthttp.StatusBadRequest, "bad_data",
 			fmt.Sprintf("time range exceeds maximum of %d hours", d.Cfg.Limits.MaxQueryRangeHours))
 		return
@@ -134,6 +144,9 @@ func (d *Deps) handleQuery(ctx *fasthttp.RequestCtx, instant bool) {
 		writeError(ctx, fasthttp.StatusBadRequest, "bad_data", err.Error())
 		return
 	}
+	if extractPattern, keepField, ok := extractDrilldownPatternStatsStage(queryStr); ok && !result.IsMetric && !result.IsAggregation {
+		result.LogsQL = augmentPatternStatsLogsQL(result.LogsQL, extractPattern, keepField)
+	}
 
 	switch {
 	case result.IsAggregation:
@@ -155,8 +168,14 @@ func (d *Deps) handleLogQuery(
 	start, end time.Time,
 	limit int,
 ) {
-	grouper := loki.NewStreamGrouper(
-		d.Cfg.Labels.KnownLabels,
+	categorizedLabels := wantsCategorizedLabels(ctx)
+	grouper := loki.NewEnrichedStreamGrouper(
+		nil, // keep full record fields in log results; KnownLabels is for discovery endpoints only
+		loki.EnrichmentConfig{
+			Labels:                     d.Cfg.Labels,
+			UseIndexedLabelsAsStream:   true,
+			UseStreamFieldAsBaseLabels: true,
+		},
 		d.Cfg.Limits.MaxStreamsPerResponse,
 	)
 
@@ -188,6 +207,18 @@ func (d *Deps) handleLogQuery(
 		ctx.Response.Header.Set("X-Proxy-Truncated", "true")
 	}
 
+	if categorizedLabels {
+		writeJSON(ctx, fasthttp.StatusOK, loki.CategorizedStreamsResponse{
+			Status: "success",
+			Data: loki.CategorizedStreamsData{
+				ResultType:    "streams",
+				EncodingFlags: []string{"categorize-labels"},
+				Result:        grouper.CategorizedStreams(),
+			},
+		})
+		return
+	}
+
 	writeJSON(ctx, fasthttp.StatusOK, loki.StreamsResponse{
 		Status: "success",
 		Data: loki.StreamsData{
@@ -195,6 +226,64 @@ func (d *Deps) handleLogQuery(
 			Result:     grouper.Streams(),
 		},
 	})
+}
+
+func wantsCategorizedLabels(ctx *fasthttp.RequestCtx) bool {
+	raw := strings.ToLower(strings.TrimSpace(string(ctx.Request.Header.Peek("X-Loki-Response-Encoding-Flags"))))
+	if raw != "" {
+		for _, part := range strings.Split(raw, ",") {
+			if strings.TrimSpace(part) == "categorize-labels" {
+				return true
+			}
+		}
+	}
+	// Grafana Logs Drilldown does not always forward the optional Loki response
+	// encoding header through every datasource path. When the query clearly
+	// matches its "log details" shape, return categorized tuples anyway so the
+	// UI can populate Parsed fields / Indexed labels consistently.
+	query := string(ctx.QueryArgs().Peek("query"))
+	return looksLikeDrilldownDetailsQuery(query) || looksLikeDrilldownPatternStatsQuery(query)
+}
+
+func looksLikeDrilldownDetailsQuery(query string) bool {
+	if query == "" {
+		return false
+	}
+	normalized := strings.ToLower(strings.Join(strings.Fields(query), " "))
+	return strings.Contains(normalized, "| json") &&
+		strings.Contains(normalized, "| logfmt") &&
+		strings.Contains(normalized, "drop __error__, __error_details__")
+}
+
+func looksLikeDrilldownPatternStatsQuery(query string) bool {
+	if query == "" {
+		return false
+	}
+	normalized := strings.ToLower(strings.Join(strings.Fields(query), " "))
+	return strings.Contains(normalized, "| pattern") &&
+		strings.Contains(normalized, "| keep") &&
+		strings.Contains(normalized, `| line_format ""`)
+}
+
+func extractDrilldownPatternStatsStage(query string) (extractPattern, keepField string, ok bool) {
+	matches := drilldownPatternStatsRe.FindStringSubmatch(query)
+	if len(matches) != 3 {
+		return "", "", false
+	}
+	rawPattern := strings.TrimSpace(matches[1])
+	if len(rawPattern) < 2 {
+		return "", "", false
+	}
+	return rawPattern[1 : len(rawPattern)-1], matches[2], true
+}
+
+func augmentPatternStatsLogsQL(base, extractPattern, keepField string) string {
+	base = strings.TrimSpace(base)
+	if base == "" {
+		base = "*"
+	}
+	return fmt.Sprintf(`%s | extract "%s" | fields _time, _msg, _stream, %s | format ""`,
+		base, strings.ReplaceAll(extractPattern, `"`, `\"`), keepField)
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -263,41 +352,60 @@ func (d *Deps) handleAggregationQuery(
 		step = time.Minute
 	}
 
-	// seriesCounts[seriesKey][bucketTime] = count
-	type bucketMap = map[time.Time]int64
-	seriesCounts := make(map[string]bucketMap)
+	type bucketMap = map[time.Time]float64
+	type sourceBucketMap = map[string]bucketMap
+
+	seriesSamples := make(map[string]sourceBucketMap)
 	seriesMetrics := make(map[string]map[string]string)
 	rangeDur := end.Sub(start)
+	inverseRemap := invertRemap(d.Cfg.Labels.LabelRemap)
 
 	scanErr := d.VL.QueryLogs(reqContext(ctx), vlogs.LogQueryRequest{
 		Query: result.LogsQL,
 		Start: start,
 		End:   end,
-		Limit: d.Cfg.Limits.MaxLimit,
 	}, func(rec vlogs.Record) error {
 		t := parseRecordTime(rec["_time"])
+		if t.IsZero() {
+			return nil
+		}
 		offset := t.Sub(start)
 		if offset < 0 || offset >= rangeDur {
 			return nil // outside the requested range
 		}
 		bucketIdx := int64(offset / step)
 		bucketTime := start.Add(time.Duration(bucketIdx) * step)
+		value := 1.0
+		if result.MetricFunc == parser.Rate {
+			value = 1 / step.Seconds()
+		}
 
 		// Build the series key and metric from the group-by labels.
 		metric := make(map[string]string, len(result.AggregateBy))
 		keyParts := make([]string, 0, len(result.AggregateBy)*2)
 		for _, label := range result.AggregateBy {
 			val := rec[label]
-			metric[label] = val
-			keyParts = append(keyParts, label, val)
+			if label == "service_name" && val == "" {
+				val = syntheticServiceName(rec)
+			}
+			outLabel := label
+			if original := inverseRemap[label]; original != "" {
+				outLabel = original
+			}
+			metric[outLabel] = val
+			keyParts = append(keyParts, outLabel, val)
 		}
 		seriesKey := strings.Join(keyParts, "\x00")
+		sourceKey := recordSeriesIdentity(rec)
 
-		if _, exists := seriesCounts[seriesKey]; !exists {
-			seriesCounts[seriesKey] = make(bucketMap)
+		if _, exists := seriesSamples[seriesKey]; !exists {
+			seriesSamples[seriesKey] = make(sourceBucketMap)
 			seriesMetrics[seriesKey] = metric
 		}
-		seriesCounts[seriesKey][bucketTime]++
+		if _, exists := seriesSamples[seriesKey][sourceKey]; !exists {
+			seriesSamples[seriesKey][sourceKey] = make(bucketMap)
+		}
+		seriesSamples[seriesKey][sourceKey][bucketTime] += value
 		return nil
 	})
 
@@ -317,18 +425,24 @@ func (d *Deps) handleAggregationQuery(
 	}
 
 	// Sort series keys for deterministic output.
-	seriesKeys := make([]string, 0, len(seriesCounts))
-	for k := range seriesCounts {
+	seriesKeys := make([]string, 0, len(seriesSamples))
+	for k := range seriesSamples {
 		seriesKeys = append(seriesKeys, k)
 	}
 	sort.Strings(seriesKeys)
 
 	matrixResult := make([]loki.MatrixSeries, 0, len(seriesKeys))
 	for _, key := range seriesKeys {
-		buckets := seriesCounts[key]
+		sources := seriesSamples[key]
 
-		times := make([]time.Time, 0, len(buckets))
-		for t := range buckets {
+		timeSet := make(map[time.Time]struct{})
+		for _, buckets := range sources {
+			for t := range buckets {
+				timeSet[t] = struct{}{}
+			}
+		}
+		times := make([]time.Time, 0, len(timeSet))
+		for t := range timeSet {
 			times = append(times, t)
 		}
 		sort.Slice(times, func(i, j int) bool { return times[i].Before(times[j]) })
@@ -336,7 +450,7 @@ func (d *Deps) handleAggregationQuery(
 		values := make([][]interface{}, len(times))
 		for i, t := range times {
 			ts := float64(t.UnixNano()) / 1e9
-			values[i] = []interface{}{ts, strconv.FormatInt(buckets[t], 10)}
+			values[i] = []interface{}{ts, formatAggregationValue(aggregateBucket(result.AggregationFunc, sources, t))}
 		}
 		matrixResult = append(matrixResult, loki.MatrixSeries{
 			Metric: seriesMetrics[key],
@@ -351,6 +465,104 @@ func (d *Deps) handleAggregationQuery(
 			Result:     matrixResult,
 		},
 	})
+}
+
+func invertRemap(remap map[string]string) map[string]string {
+	if len(remap) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(remap))
+	for original, mapped := range remap {
+		out[mapped] = original
+	}
+	return out
+}
+
+func recordSeriesIdentity(rec vlogs.Record) string {
+	if stream := rec["_stream"]; stream != "" {
+		return stream
+	}
+	labels := make(map[string]string, len(rec))
+	for k, v := range rec {
+		if k == "_msg" || k == "_time" {
+			continue
+		}
+		labels[k] = v
+	}
+	return buildSeriesIdentity(labels)
+}
+
+func buildSeriesIdentity(labels map[string]string) string {
+	if len(labels) == 0 {
+		return "{}"
+	}
+	keys := make([]string, 0, len(labels))
+	for k := range labels {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var sb strings.Builder
+	sb.WriteByte('{')
+	for i, k := range keys {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		sb.WriteString(k)
+		sb.WriteByte('=')
+		sb.WriteString(labels[k])
+	}
+	sb.WriteByte('}')
+	return sb.String()
+}
+
+func aggregateBucket(fn parser.AggregationFunction, sources map[string]map[time.Time]float64, t time.Time) float64 {
+	var (
+		sum   float64
+		min   float64
+		max   float64
+		count int
+	)
+	for _, buckets := range sources {
+		v, ok := buckets[t]
+		if !ok {
+			continue
+		}
+		if count == 0 {
+			min, max = v, v
+		} else {
+			if v < min {
+				min = v
+			}
+			if v > max {
+				max = v
+			}
+		}
+		sum += v
+		count++
+	}
+	if count == 0 {
+		return 0
+	}
+	switch fn {
+	case parser.AggCount:
+		return float64(count)
+	case parser.AggAvg:
+		return sum / float64(count)
+	case parser.AggMin:
+		return min
+	case parser.AggMax:
+		return max
+	default:
+		return sum
+	}
+}
+
+func formatAggregationValue(v float64) string {
+	if v == float64(int64(v)) {
+		return strconv.FormatInt(int64(v), 10)
+	}
+	return strconv.FormatFloat(v, 'f', -1, 64)
 }
 
 // parseRecordTime parses a VictoriaLogs _time field (RFC3339Nano) into a

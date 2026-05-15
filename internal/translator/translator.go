@@ -27,11 +27,33 @@ package translator
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/parser"
 )
+
+var serviceNameFallbackFields = []string{
+	"service_name",
+	"service.name",
+	"service",
+	"labels.app.kubernetes.io/name",
+	"labels.k8s-app",
+	"labels.app",
+	"app",
+	"application",
+	"app_name",
+	"app_kubernetes_io_name",
+	"container",
+	"k8s.container.name",
+	"container.name",
+	"container_name",
+	"k8s_container_name",
+	"job",
+	"k8s.job.name",
+	"k8s_job_name",
+}
 
 // ────────────────────────────────────────────────────────────────────────────
 // Public types
@@ -65,6 +87,10 @@ type Result struct {
 	// operator (sum, count, avg, min, max). The handler streams records and
 	// groups them in memory instead of using the /hits endpoint.
 	IsAggregation bool
+
+	// AggregationFunc identifies the outer vector aggregation operator.
+	// Only meaningful when IsAggregation is true.
+	AggregationFunc parser.AggregationFunction
 
 	// AggregateBy is the list of label names from the "by (...)" clause.
 	// An empty slice means aggregate across all series into one (no grouping).
@@ -126,13 +152,14 @@ func Translate(q parser.Query, opts Options) (Result, error) {
 			return Result{}, err
 		}
 		return Result{
-			LogsQL:        logsql,
-			HasJSONParser: hasJSON,
-			IsMetric:      true,
-			IsAggregation: true,
-			MetricFunc:    v.Inner.Function,
-			MetricRange:   v.Inner.Range,
-			AggregateBy:   remapNames(v.By, opts.LabelRemap),
+			LogsQL:          logsql,
+			HasJSONParser:   hasJSON,
+			IsMetric:        true,
+			IsAggregation:   true,
+			AggregationFunc: v.Function,
+			MetricFunc:      v.Inner.Function,
+			MetricRange:     v.Inner.Range,
+			AggregateBy:     remapNames(v.By, opts.LabelRemap),
 		}, nil
 
 	default:
@@ -149,19 +176,24 @@ func Translate(q parser.Query, opts Options) (Result, error) {
 func translateLogQuery(lq *parser.LogQuery, opts Options) (logsql string, hasJSON bool, err error) {
 	var terms []string
 	var pipes []string
+	var hasLogfmt bool
 
 	for _, m := range lq.Selector.Matchers {
 		t, terr := translateMatcher(m, opts)
 		if terr != nil {
 			return "", false, terr
 		}
-		terms = append(terms, t)
+		if t != "" {
+			terms = append(terms, t)
+		}
 	}
 
 	for _, stage := range lq.Pipeline {
 		switch s := stage.(type) {
 		case *parser.LineFilter:
-			terms = append(terms, translateLineFilter(s))
+			if term := translateLineFilter(s); term != "" {
+				terms = append(terms, term)
+			}
 		case *parser.LabelFilter:
 			t, terr := translateLabelFilter(s, opts)
 			if terr != nil {
@@ -173,12 +205,21 @@ func translateLogQuery(lq *parser.LogQuery, opts Options) (logsql string, hasJSO
 		case *parser.JSONParser:
 			hasJSON = true // not added to the query string; VL auto-parses JSON
 		case *parser.LogfmtParser:
-			pipes = append(pipes, "unpack_logfmt")
+			hasLogfmt = true
 		default:
 			return "", false, &TranslationError{
 				Msg: fmt.Sprintf("unknown pipeline stage type %T", stage),
 			}
 		}
+	}
+
+	// Grafana Logs Drilldown commonly appends `| json | logfmt` to many queries
+	// as a generic parsing hint. On non-logfmt text lines, translating that to
+	// `| unpack_logfmt` causes VictoriaLogs to extract garbage pseudo-fields
+	// from arbitrary message text. If both parser hints are present, treat them
+	// as no-ops and rely on the fields already indexed by VictoriaLogs.
+	if hasLogfmt && !hasJSON {
+		pipes = append(pipes, "unpack_logfmt")
 	}
 
 	filter := "*"
@@ -192,7 +233,14 @@ func translateLogQuery(lq *parser.LogQuery, opts Options) (logsql string, hasJSO
 }
 
 func translateMatcher(m parser.LabelMatcher, opts Options) (string, error) {
-	f := quoteLabelName(remapName(m.Name, opts.LabelRemap))
+	name := remapName(m.Name, opts.LabelRemap)
+	if name == "service_name" {
+		return translateSyntheticServiceNameMatcher(m)
+	}
+	if vlInternalFields[name] {
+		return translateInternalMatcher(name, m)
+	}
+	f := quoteLabelName(name)
 	switch m.Type {
 	case parser.Eq:
 		return fmt.Sprintf(`%s:="%s"`, f, escapeLit(m.Value)), nil
@@ -207,6 +255,109 @@ func translateMatcher(m parser.LabelMatcher, opts Options) (string, error) {
 	}
 }
 
+func translateSyntheticServiceNameMatcher(m parser.LabelMatcher) (string, error) {
+	if len(serviceNameFallbackFields) == 0 {
+		return "", &TranslationError{Msg: "service_name fallback fields are not configured"}
+	}
+
+	// Grafana Drilldown commonly filters synthetic service_name with `!= ""`.
+	// Model this as "at least one fallback field is non-empty", which is a much
+	// closer approximation than NOT(field="") OR ... over absent fields.
+	if m.Type == parser.Neq && m.Value == "" {
+		parts := make([]string, 0, len(serviceNameFallbackFields))
+		for _, field := range serviceNameFallbackFields {
+			parts = append(parts, fmt.Sprintf(`%s:~".+"`, quoteLabelName(field)))
+		}
+		return "(" + strings.Join(parts, " OR ") + ")", nil
+	}
+
+	parts := make([]string, 0, len(serviceNameFallbackFields))
+	for _, field := range serviceNameFallbackFields {
+		qf := quoteLabelName(field)
+		switch m.Type {
+		case parser.Eq:
+			parts = append(parts, fmt.Sprintf(`%s:="%s"`, qf, escapeLit(m.Value)))
+		case parser.Neq:
+			parts = append(parts, fmt.Sprintf(`%s:="%s"`, qf, escapeLit(m.Value)))
+		case parser.Re:
+			parts = append(parts, fmt.Sprintf(`%s:~"%s"`, qf, escapeRe(m.Value)))
+		case parser.Nre:
+			parts = append(parts, fmt.Sprintf(`%s:~"%s"`, qf, escapeRe(m.Value)))
+		default:
+			return "", &TranslationError{Msg: fmt.Sprintf("unknown match type %d", m.Type)}
+		}
+	}
+
+	joined := "(" + strings.Join(parts, " OR ") + ")"
+	switch m.Type {
+	case parser.Eq, parser.Re:
+		return joined, nil
+	case parser.Neq, parser.Nre:
+		return "NOT " + joined, nil
+	default:
+		return "", &TranslationError{Msg: fmt.Sprintf("unknown match type %d", m.Type)}
+	}
+}
+
+func translateInternalMatcher(name string, m parser.LabelMatcher) (string, error) {
+	switch name {
+	case "_stream":
+		return translateStreamSelectorMatcher(m)
+	case "_stream_id":
+		return translateStreamIDSelectorMatcher(m)
+	case "_time":
+		return translateTimeSelectorMatcher(m)
+	default:
+		return "", &TranslationError{Msg: fmt.Sprintf("unsupported internal field %q", name)}
+	}
+}
+
+func translateStreamSelectorMatcher(m parser.LabelMatcher) (string, error) {
+	if m.Type != parser.Eq && m.Type != parser.Neq {
+		return "", &TranslationError{Msg: "_stream supports only = and !="}
+	}
+	// Grafana Drilldown frequently appends `_stream != ""` to exclude empty
+	// values. For VictoriaLogs this is effectively a no-op and must be dropped;
+	// otherwise we would reject a valid Drilldown-generated query before it
+	// reaches the backend.
+	if m.Type == parser.Neq && m.Value == "" {
+		return "", nil
+	}
+	if !strings.HasPrefix(m.Value, "{") || !strings.HasSuffix(m.Value, "}") {
+		return "", &TranslationError{Msg: "_stream value must be a VictoriaLogs stream selector like {label=\"value\"}"}
+	}
+	if m.Type == parser.Neq {
+		return "NOT " + m.Value, nil
+	}
+	return m.Value, nil
+}
+
+func translateStreamIDSelectorMatcher(m parser.LabelMatcher) (string, error) {
+	if m.Type != parser.Eq && m.Type != parser.Neq {
+		return "", &TranslationError{Msg: "_stream_id supports only = and !="}
+	}
+	// Grafana Drilldown appends `_stream_id != ""` for grouping/filter UX.
+	// VictoriaLogs doesn't support `_stream_id` with the generic selector
+	// syntax, so the empty-negation form is treated as a no-op.
+	if m.Type == parser.Neq && m.Value == "" {
+		return "", nil
+	}
+	return "", &TranslationError{Msg: "_stream_id stream selector is not supported"}
+}
+
+func translateTimeSelectorMatcher(m parser.LabelMatcher) (string, error) {
+	if m.Type != parser.Eq && m.Type != parser.Neq {
+		return "", &TranslationError{Msg: "_time supports only = and !="}
+	}
+	// Grafana Drilldown appends `_time != ""` for time-based groupings.
+	// The actual time range is already enforced by the request start/end
+	// parameters, so this selector adds no value and must be dropped.
+	if m.Type == parser.Neq && m.Value == "" {
+		return "", nil
+	}
+	return "", &TranslationError{Msg: "_time stream selector is not supported"}
+}
+
 // vlInternalFields lists VictoriaLogs field names that use non-standard filter
 // syntax and therefore cannot be expressed with the :=/:~ operators. Label
 // filter stages that target these fields are silently dropped.
@@ -217,6 +368,7 @@ func translateMatcher(m parser.LabelMatcher, opts Options) (string, error) {
 var vlInternalFields = map[string]bool{
 	"_stream":    true,
 	"_stream_id": true,
+	"_time":      true,
 }
 
 func translateLabelFilter(f *parser.LabelFilter, opts Options) (string, error) {
@@ -242,6 +394,12 @@ func translateLabelFilter(f *parser.LabelFilter, opts Options) (string, error) {
 func translateLineFilter(f *parser.LineFilter) string {
 	switch f.Op {
 	case parser.Contains:
+		// In LogQL an empty contains filter (`|= ""` or `|= ```) matches every
+		// line, so it must behave as a no-op. Emitting `_msg:""` would
+		// over-constrain the VictoriaLogs query and can hide valid records.
+		if f.Value == "" {
+			return ""
+		}
 		// LogsQL uses _msg:"text" for substring/word search (no := needed)
 		return fmt.Sprintf(`_msg:"%s"`, escapeLit(f.Value))
 	case parser.NotContains:
@@ -250,10 +408,105 @@ func translateLineFilter(f *parser.LineFilter) string {
 		return fmt.Sprintf(`_msg:~"%s"`, escapeRe(f.Value))
 	case parser.NotRegex:
 		return fmt.Sprintf(`NOT _msg:~"%s"`, escapeRe(f.Value))
+	case parser.Pattern:
+		return fmt.Sprintf(`_msg:~"%s"`, escapeRe(logQLPatternToRegex(f.Value)))
 	default:
 		// Defensive fallback; the parser never produces an unknown FilterOp.
 		return fmt.Sprintf(`_msg:"%s"`, escapeLit(f.Value))
 	}
+}
+
+var patternPlaceholders = map[string]string{
+	"<_>":        ".*",
+	"<N>":        "[0-9]+",
+	"<IP4>":      "(?:[0-9]{1,3}\\.){3}[0-9]{1,3}",
+	"<UUID>":     "[0-9a-fA-F-]{36}",
+	"<DATE>":     "[0-9]{4}-[0-9]{2}-[0-9]{2}",
+	"<TIME>":     "[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]+)?",
+	"<DATETIME>": "[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9:+\\-.Z]+",
+}
+
+func logQLPatternToRegex(pattern string) string {
+	var sb strings.Builder
+	for i := 0; i < len(pattern); {
+		if pattern[i] == ' ' || pattern[i] == '\t' || pattern[i] == '\n' || pattern[i] == '\r' {
+			for i < len(pattern) {
+				switch pattern[i] {
+				case ' ', '\t', '\n', '\r':
+					i++
+				default:
+					sb.WriteString(`[[:space:]]+`)
+					goto next
+				}
+			}
+			sb.WriteString(`[[:space:]]+`)
+			break
+		}
+		if pattern[i] == '<' {
+			if j := strings.IndexByte(pattern[i:], '>'); j >= 0 {
+				token := pattern[i : i+j+1]
+				if repl, ok := patternPlaceholders[token]; ok {
+					sb.WriteString(repl)
+					i += j + 1
+					continue
+				}
+				// Unknown placeholder: treat it as a generic wildcard rather
+				// than failing hard, since Grafana may introduce new token types.
+				sb.WriteString(".*")
+				i += j + 1
+				continue
+			}
+		}
+		sb.WriteString(regexp.QuoteMeta(pattern[i : i+1]))
+		i++
+	next:
+	}
+	return normalizePatternRegex(sb.String())
+}
+
+func normalizePatternRegex(s string) string {
+	// VictoriaLogs `collapse_nums prettify` may emit scientific-notation-like
+	// numeric patterns as `<N>.<N>+<N>` while the original raw message still
+	// contains an exponent marker, e.g. `1.23e+09`. Accept an optional e/E in
+	// that shape so Grafana's "Toggle Raw Expanded" can find the source lines.
+	s = strings.ReplaceAll(
+		s,
+		`[0-9]+\.[0-9]+\+[0-9]+`,
+		`[0-9]+\.[0-9]+(?:e|E)?\+[0-9]+`,
+	)
+	s = strings.ReplaceAll(
+		s,
+		`[0-9]+\.[0-9]+-[0-9]+`,
+		`[0-9]+\.[0-9]+(?:e|E)?-[0-9]+`,
+	)
+	// Grafana pattern collapse can produce URL-encoded fragments like `%<N>`
+	// inside long query strings. In the original raw log these are percent-
+	// encoded hex bytes such as `%2F`, `%3D`, `%7B`, so matching only decimal
+	// digits is too strict and misses valid source lines.
+	s = strings.ReplaceAll(
+		s,
+		`%[0-9]+`,
+		`%[0-9A-Fa-f]+`,
+	)
+	// Long URL/query fragments inside log patterns may encode spaces as `+`,
+	// `%20`, or even arrive decoded as ordinary whitespace depending on how the
+	// message was produced. Accept all three forms so Grafana's raw-pattern
+	// expansion can still find the source line for verbose vmalert-style logs.
+	s = strings.ReplaceAll(
+		s,
+		`\+`,
+		`(?:\+|%20|[[:space:]]+)`,
+	)
+	// Kubernetes object names and revision labels often end with a variable
+	// suffix after a hyphen. Grafana's collapsed patterns may render that
+	// suffix as `<N>` even when the original value is hash-like rather than
+	// purely numeric. In identifier-suffix position, allow alphanumeric/hyphen
+	// values so raw expansion can still find the original log lines.
+	s = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_.-]*-)\[0-9\]\+`).ReplaceAllString(
+		s,
+		`${1}[A-Za-z0-9-]+`,
+	)
+	return s
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -312,8 +565,11 @@ func escapeLit(s string) string {
 }
 
 // escapeRe escapes a regex value for a LogsQL double-quoted string.
-// Only double-quotes are escaped; backslashes retain their regex-engine
-// meaning (e.g. \d, \s, \w are preserved unchanged).
+// Backslashes must be doubled so they survive the LogsQL string parser and
+// still reach the regex engine as escapes; double-quotes are escaped after
+// that. This preserves regex tokens such as \d, \s, \w and also allows
+// literal quoted fragments like \"text\" inside the regex body.
 func escapeRe(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
 	return strings.ReplaceAll(s, `"`, `\"`)
 }

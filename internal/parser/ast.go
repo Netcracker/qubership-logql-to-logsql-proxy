@@ -119,6 +119,7 @@ const (
 	NotContains                 // != "text"
 	Regex                       // |~ "re"
 	NotRegex                    // !~ "re"
+	Pattern                     // |> "pattern"
 )
 
 // LineFilter filters log lines by content or regex.

@@ -16,6 +16,27 @@ import (
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/vlogs"
 )
 
+var syntheticServiceNameFields = []string{
+	"service_name",
+	"service.name",
+	"service",
+	"labels.app.kubernetes.io/name",
+	"labels.k8s-app",
+	"labels.app",
+	"app",
+	"application",
+	"app_name",
+	"app_kubernetes_io_name",
+	"container",
+	"k8s.container.name",
+	"container.name",
+	"container_name",
+	"k8s_container_name",
+	"job",
+	"k8s.job.name",
+	"k8s_job_name",
+}
+
 // IndexVolume handles GET /loki/api/v1/index/volume and
 // GET /loki/api/v1/index/volume_range.
 //
@@ -184,8 +205,20 @@ func volumeKey(rec vlogs.Record, groupLabels []string) (string, map[string]strin
 	metric := make(map[string]string, len(groupLabels))
 	for _, name := range groupLabels {
 		val := rec[name]
+		if name == "service_name" && val == "" {
+			val = syntheticServiceName(rec)
+		}
 		metric[name] = val
 		parts = append(parts, name, val)
 	}
 	return strings.Join(parts, "\x00"), metric
+}
+
+func syntheticServiceName(rec vlogs.Record) string {
+	for _, field := range syntheticServiceNameFields {
+		if val := rec[field]; val != "" {
+			return val
+		}
+	}
+	return ""
 }

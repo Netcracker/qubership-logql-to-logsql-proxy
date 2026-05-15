@@ -14,9 +14,9 @@ import (
 // fasthttp/router (v1.5.4) has a radix-tree bug where a parametric route
 // like /loki/api/v1/label/:name/values becomes unreachable when the static
 // route /loki/api/v1/labels is also registered (shared prefix "label"). To
-// work around this, /loki/api/v1/label/:name/values is NOT registered with
-// the router and is instead matched by extracting the name segment manually
-// in the returned wrapper handler.
+// work around this, parametric "* /values" routes are NOT registered with the
+// router and are instead matched by extracting the name segment manually in
+// the returned wrapper handler.
 func (d *Deps) BuildHandler() fasthttp.RequestHandler {
 	r := router.New()
 
@@ -41,14 +41,20 @@ func (d *Deps) BuildHandler() fasthttp.RequestHandler {
 
 	inner := r.Handler
 	labelValuesHandler := d.LabelValues
+	detectedFieldValuesHandler := d.DetectedFieldValues
 
 	return func(ctx *fasthttp.RequestCtx) {
-		// Manual match for /loki/api/v1/label/:name/values to work around the
-		// fasthttp/router radix-tree bug with the /labels static sibling route.
+		// Manual matches for "* /values" routes to work around the
+		// fasthttp/router radix-tree bug with static sibling routes.
 		if string(ctx.Method()) == "GET" {
-			if name := extractLabelValueName(string(ctx.Path())); name != "" {
+			if name := extractSingleSegmentName(string(ctx.Path()), "/loki/api/v1/label/", "/values"); name != "" {
 				ctx.SetUserValue("name", name)
 				labelValuesHandler(ctx)
+				return
+			}
+			if name := extractSingleSegmentName(string(ctx.Path()), "/loki/api/v1/detected_field/", "/values"); name != "" {
+				ctx.SetUserValue("name", name)
+				detectedFieldValuesHandler(ctx)
 				return
 			}
 		}
@@ -56,11 +62,9 @@ func (d *Deps) BuildHandler() fasthttp.RequestHandler {
 	}
 }
 
-// extractLabelValueName returns the label name segment from a path matching
-// /loki/api/v1/label/{name}/values, or "" if the path does not match.
-func extractLabelValueName(path string) string {
-	const prefix = "/loki/api/v1/label/"
-	const suffix = "/values"
+// extractSingleSegmentName returns the name segment from a path matching
+// {prefix}{name}{suffix}, or "" if the path does not match.
+func extractSingleSegmentName(path, prefix, suffix string) string {
 	if !strings.HasPrefix(path, prefix) || !strings.HasSuffix(path, suffix) {
 		return ""
 	}

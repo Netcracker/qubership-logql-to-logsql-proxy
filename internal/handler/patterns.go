@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/valyala/fasthttp"
@@ -14,6 +16,10 @@ import (
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/parser"
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/translator"
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/vlogs"
+)
+
+var (
+	scientificPatternTokenRe = regexp.MustCompile(`(?:<N>|[0-9]+)\.(?:<N>|[0-9]+)e[+-](?:<N>|[0-9]+)`)
 )
 
 // Patterns handles GET /loki/api/v1/patterns.
@@ -81,9 +87,11 @@ func (d *Deps) Patterns(ctx *fasthttp.RequestCtx) {
 	// `| fields _msg, _time` avoids transmitting all other log fields.
 	logsqlQuery := xlat.LogsQL + " | collapse_nums prettify | fields _msg, _time"
 
-	// patternBuckets maps collapsed _msg → (step-bucket index → hit count).
+	// patternBuckets maps normalized pattern identity → (step-bucket index → hit count).
 	patternBuckets := make(map[string]map[int64]int64)
 	patternTotal := make(map[string]int64)
+	patternText := make(map[string]string)
+	patternLevel := make(map[string]string)
 
 	scanErr := d.VL.QueryLogs(reqContext(ctx), vlogs.LogQueryRequest{
 		Query: logsqlQuery,
@@ -111,13 +119,18 @@ func (d *Deps) Patterns(ctx *fasthttp.RequestCtx) {
 			idx = 0
 		}
 
-		b, ok := patternBuckets[msg]
+		pattern, level := normalizePatternMessage(msg)
+		key := patternIdentityKey(pattern, level)
+
+		b, ok := patternBuckets[key]
 		if !ok {
 			b = make(map[int64]int64)
-			patternBuckets[msg] = b
+			patternBuckets[key] = b
 		}
 		b[idx]++
-		patternTotal[msg]++
+		patternTotal[key]++
+		patternText[key] = pattern
+		patternLevel[key] = level
 		return nil
 	})
 
@@ -140,12 +153,18 @@ func (d *Deps) Patterns(ctx *fasthttp.RequestCtx) {
 	// Rank patterns by total hit count and apply the caller-requested limit.
 	type entry struct {
 		pattern string
+		level   string
 		total   int64
 		buckets map[int64]int64
 	}
 	ranked := make([]entry, 0, len(patternBuckets))
-	for pattern, b := range patternBuckets {
-		ranked = append(ranked, entry{pattern: pattern, total: patternTotal[pattern], buckets: b})
+	for key, b := range patternBuckets {
+		ranked = append(ranked, entry{
+			pattern: patternText[key],
+			level:   patternLevel[key],
+			total:   patternTotal[key],
+			buckets: b,
+		})
 	}
 	sort.Slice(ranked, func(i, j int) bool {
 		return ranked[i].total > ranked[j].total
@@ -157,24 +176,42 @@ func (d *Deps) Patterns(ctx *fasthttp.RequestCtx) {
 	// Stream labels come from the equality-matched label pairs in the selector.
 	// Regex / negative matchers have no single representative value so they are
 	// omitted, matching Loki's own behaviour.
-	labels := selectorEqualityLabels(ast)
+	baseLabels := selectorEqualityLabels(ast)
 
 	data := make([]loki.PatternEntry, 0, len(ranked))
 	for _, e := range ranked {
-		// Emit samples sorted by bucket index so Grafana renders them in order.
-		idxs := make([]int64, 0, len(e.buckets))
-		for idx := range e.buckets {
-			idxs = append(idxs, idx)
+		samples := make([][]interface{}, 0, len(e.buckets))
+		if step > 0 {
+			totalBuckets := int64(end.Sub(start) / step)
+			if totalBuckets < 0 {
+				totalBuckets = 0
+			}
+			for idx := int64(0); idx <= totalBuckets; idx++ {
+				bucketTime := start.Add(time.Duration(idx) * step)
+				samples = append(samples, []interface{}{
+					float64(bucketTime.UnixNano()) / 1e9,
+					e.buckets[idx],
+				})
+			}
+		} else {
+			// Fallback: emit only observed buckets if no valid step was given.
+			idxs := make([]int64, 0, len(e.buckets))
+			for idx := range e.buckets {
+				idxs = append(idxs, idx)
+			}
+			sort.Slice(idxs, func(i, j int) bool { return idxs[i] < idxs[j] })
+			for _, idx := range idxs {
+				bucketTime := start.Add(time.Duration(idx) * step)
+				samples = append(samples, []interface{}{
+					float64(bucketTime.UnixNano()) / 1e9,
+					e.buckets[idx],
+				})
+			}
 		}
-		sort.Slice(idxs, func(i, j int) bool { return idxs[i] < idxs[j] })
 
-		samples := make([][]interface{}, 0, len(idxs))
-		for _, idx := range idxs {
-			bucketTime := start.Add(time.Duration(idx) * step)
-			samples = append(samples, []interface{}{
-				float64(bucketTime.UnixNano()) / 1e9,
-				e.buckets[idx],
-			})
+		labels := cloneLabels(baseLabels)
+		if e.level != "" {
+			labels["detected_level"] = e.level
 		}
 
 		data = append(data, loki.PatternEntry{
@@ -188,6 +225,51 @@ func (d *Deps) Patterns(ctx *fasthttp.RequestCtx) {
 		Status: "success",
 		Data:   data,
 	})
+}
+
+func normalizePatternMessage(msg string) (string, string) {
+	msg = strings.TrimSpace(msg)
+	msg = scientificPatternTokenRe.ReplaceAllString(msg, "<N>.<N>+<N>")
+	msg = strings.Join(strings.Fields(msg), " ")
+
+	level := extractPatternLevel(msg)
+	if idx := strings.Index(msg, " periodic "); idx > 0 {
+		prefix := strings.TrimSpace(msg[:idx])
+		if strings.Contains(prefix, "<N>.<N>+<N>") {
+			return "<_>" + msg[idx:], level
+		}
+	}
+	return msg, level
+}
+
+func extractPatternLevel(msg string) string {
+	for _, field := range strings.Fields(msg) {
+		switch field {
+		case "INFO":
+			return "info"
+		case "WARN", "WARNING":
+			return "warning"
+		case "ERROR", "ERR":
+			return "error"
+		case "DEBUG":
+			return "debug"
+		case "TRACE":
+			return "trace"
+		}
+	}
+	return ""
+}
+
+func patternIdentityKey(pattern, level string) string {
+	return pattern + "\x00" + level
+}
+
+func cloneLabels(in map[string]string) map[string]string {
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 // selectorEqualityLabels extracts only equality-matched labels from the stream

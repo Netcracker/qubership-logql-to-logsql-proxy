@@ -74,8 +74,27 @@ type LimitsConfig struct {
 
 // LabelsConfig controls label discovery and caching.
 type LabelsConfig struct {
-	// KnownLabels is a static allowlist for /labels. Empty = query VL dynamically.
+	// KnownLabels is a static allowlist for /labels and /detected_labels.
+	// Empty = query VL dynamically.
 	KnownLabels []string
+
+	// KnownParsedFields is an optional allowlist of fields that should be
+	// treated as parsed log fields (for example parser-derived fields such as
+	// parse_format or source_level). It does not currently affect the query
+	// response shape, but it is used by field-classification helpers so the
+	// proxy can keep labels, fields, and log details on separate tracks.
+	KnownParsedFields []string
+
+	// KnownStructuredMetadata is an optional allowlist of fields that should be
+	// treated as structured metadata rather than indexed labels or parsed
+	// fields. This is primarily a classification hint for Grafana-facing field
+	// discovery and future enriched log-frame shaping.
+	KnownStructuredMetadata []string
+
+	// ExcludedFields contains fields that should never surface through generic
+	// field-discovery endpoints. Internal VL transport fields such as _msg and
+	// _time live here by default.
+	ExcludedFields []string
 
 	// LabelRemap translates LogQL label names to their VictoriaLogs equivalents
 	// before emitting LogsQL. The default mapping is:
@@ -145,10 +164,13 @@ type rawLimitsConfig struct {
 }
 
 type rawLabelsConfig struct {
-	KnownLabels       []string          `yaml:"knownLabels"`
-	LabelRemap        map[string]string `yaml:"labelRemap"`
-	MetadataCacheTTL  string            `yaml:"metadataCacheTTL"`
-	MetadataCacheSize int               `yaml:"metadataCacheSize"`
+	KnownLabels             []string          `yaml:"knownLabels"`
+	KnownParsedFields       []string          `yaml:"knownParsedFields"`
+	KnownStructuredMetadata []string          `yaml:"knownStructuredMetadata"`
+	ExcludedFields          []string          `yaml:"excludedFields"`
+	LabelRemap              map[string]string `yaml:"labelRemap"`
+	MetadataCacheTTL        string            `yaml:"metadataCacheTTL"`
+	MetadataCacheSize       int               `yaml:"metadataCacheSize"`
 }
 
 type rawLogConfig struct {
@@ -178,6 +200,36 @@ func defaultRaw() *rawConfig {
 	r.Limits.MaxQueryRangeHours = 24
 	r.Limits.MaxLimit = 5000
 	r.Limits.DefaultLimit = 1000
+	r.Labels.KnownLabels = []string{
+		"service_name",
+		"detected_level",
+		"namespace",
+		"container",
+		"pod",
+		"nodename",
+		"hostname",
+	}
+	r.Labels.KnownParsedFields = []string{
+		"parse_format",
+		"parse_status",
+		"parse_level_unknown",
+		"file",
+		"source_level",
+		"klog_date",
+		"date",
+		"pid",
+	}
+	r.Labels.KnownStructuredMetadata = []string{
+		"labels.component",
+		"labels.tier",
+		"log_category",
+	}
+	r.Labels.ExcludedFields = []string{
+		"_msg",
+		"_time",
+		"_stream",
+		"_stream_id",
+	}
 	r.Labels.LabelRemap = map[string]string{
 		"detected_level": "level",
 	}
@@ -280,14 +332,16 @@ func applyEnv(r *rawConfig) {
 
 	// Labels
 	if v := os.Getenv("PROXY_LABELS_KNOWNLABELS"); v != "" {
-		parts := strings.Split(v, ",")
-		labels := parts[:0]
-		for _, p := range parts {
-			if t := strings.TrimSpace(p); t != "" {
-				labels = append(labels, t)
-			}
-		}
-		r.Labels.KnownLabels = labels
+		r.Labels.KnownLabels = parseCSVEnv(v)
+	}
+	if v := os.Getenv("PROXY_LABELS_KNOWNPARSEDFIELDS"); v != "" {
+		r.Labels.KnownParsedFields = parseCSVEnv(v)
+	}
+	if v := os.Getenv("PROXY_LABELS_KNOWNSTRUCTUREDMETADATA"); v != "" {
+		r.Labels.KnownStructuredMetadata = parseCSVEnv(v)
+	}
+	if v := os.Getenv("PROXY_LABELS_EXCLUDEDFIELDS"); v != "" {
+		r.Labels.ExcludedFields = parseCSVEnv(v)
 	}
 	envStr("PROXY_LABELS_METADATACACHETTL", &r.Labels.MetadataCacheTTL)
 	envInt("PROXY_LABELS_METADATACACHESIZE", &r.Labels.MetadataCacheSize)
@@ -343,10 +397,13 @@ func convert(r *rawConfig) (*Config, error) {
 			DefaultLimit:          r.Limits.DefaultLimit,
 		},
 		Labels: LabelsConfig{
-			KnownLabels:       r.Labels.KnownLabels,
-			LabelRemap:        r.Labels.LabelRemap,
-			MetadataCacheTTL:  dur(r.Labels.MetadataCacheTTL, "labels.metadataCacheTTL"),
-			MetadataCacheSize: r.Labels.MetadataCacheSize,
+			KnownLabels:             r.Labels.KnownLabels,
+			KnownParsedFields:       r.Labels.KnownParsedFields,
+			KnownStructuredMetadata: r.Labels.KnownStructuredMetadata,
+			ExcludedFields:          r.Labels.ExcludedFields,
+			LabelRemap:              r.Labels.LabelRemap,
+			MetadataCacheTTL:        dur(r.Labels.MetadataCacheTTL, "labels.metadataCacheTTL"),
+			MetadataCacheSize:       r.Labels.MetadataCacheSize,
 		},
 		Log: LogConfig{
 			Level:  r.Log.Level,
@@ -463,4 +520,15 @@ func envInt64(name string, dst *int64) {
 			*dst = n
 		}
 	}
+}
+
+func parseCSVEnv(v string) []string {
+	parts := strings.Split(v, ",")
+	out := parts[:0]
+	for _, p := range parts {
+		if t := strings.TrimSpace(p); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
 }

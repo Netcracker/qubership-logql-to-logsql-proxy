@@ -121,6 +121,24 @@ labels:
   {{- else }}
   knownLabels: []
   {{- end }}
+  {{- if .Values.proxy.labels.knownParsedFields }}
+  knownParsedFields:
+    {{- toYaml .Values.proxy.labels.knownParsedFields | nindent 4 }}
+  {{- else }}
+  knownParsedFields: []
+  {{- end }}
+  {{- if .Values.proxy.labels.knownStructuredMetadata }}
+  knownStructuredMetadata:
+    {{- toYaml .Values.proxy.labels.knownStructuredMetadata | nindent 4 }}
+  {{- else }}
+  knownStructuredMetadata: []
+  {{- end }}
+  {{- if .Values.proxy.labels.excludedFields }}
+  excludedFields:
+    {{- toYaml .Values.proxy.labels.excludedFields | nindent 4 }}
+  {{- else }}
+  excludedFields: []
+  {{- end }}
   metadataCacheTTL: {{ .Values.proxy.labels.metadataCacheTTL | quote }}
   metadataCacheSize: {{ .Values.proxy.labels.metadataCacheSize }}
 

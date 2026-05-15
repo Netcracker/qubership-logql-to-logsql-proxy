@@ -2,6 +2,7 @@ package translator_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -50,6 +51,67 @@ func TestTranslateSimpleSelector(t *testing.T) {
 	}
 }
 
+func TestTranslateSyntheticServiceNameRegexMatcher(t *testing.T) {
+	r := parseAndTranslate(t, `{service_name=~".+"}`)
+	for _, want := range []string{
+		`service_name:~".+"`,
+		`"labels.app.kubernetes.io/name":~".+"`,
+		`container:~".+"`,
+	} {
+		if !strings.Contains(r.LogsQL, want) {
+			t.Errorf("LogsQL %q does not contain %q", r.LogsQL, want)
+		}
+	}
+}
+
+func TestTranslateSyntheticServiceNameNotEmptyMatcher(t *testing.T) {
+	r := parseAndTranslate(t, `{service_name!=""}`)
+	for _, want := range []string{
+		`service_name:~".+"`,
+		`"labels.app.kubernetes.io/name":~".+"`,
+		`container:~".+"`,
+	} {
+		if !strings.Contains(r.LogsQL, want) {
+			t.Errorf("LogsQL %q does not contain %q", r.LogsQL, want)
+		}
+	}
+	if strings.Contains(r.LogsQL, `NOT service_name:=""`) {
+		t.Errorf("LogsQL %q still uses the old empty-negation form", r.LogsQL)
+	}
+}
+
+func TestTranslateInternalStreamSelector(t *testing.T) {
+	r := parseAndTranslate(t, `{_stream="{container=\"cloud-provider-kind\",namespace=\"kube-system\"}"}`)
+	want := `{container="cloud-provider-kind",namespace="kube-system"}`
+	if r.LogsQL != want {
+		t.Errorf("got %q, want %q", r.LogsQL, want)
+	}
+}
+
+func TestTranslateInternalStreamSelectorNotEmptyIsDropped(t *testing.T) {
+	r := parseAndTranslate(t, `{level="info", _stream!=""}`)
+	want := `level:="info"`
+	if r.LogsQL != want {
+		t.Errorf("got %q, want %q", r.LogsQL, want)
+	}
+}
+
+func TestTranslateInternalStreamIDSelectorNotEmptyIsDropped(t *testing.T) {
+	r := parseAndTranslate(t, `{level="info", _stream_id!=""}`)
+	want := `level:="info"`
+	if r.LogsQL != want {
+		t.Errorf("got %q, want %q", r.LogsQL, want)
+	}
+}
+
+func TestTranslateInternalTimeSelectorNotEmptyIsDropped(t *testing.T) {
+	r := parseAndTranslate(t, `{level="err", _time!=""}`)
+	want := `level:="err"`
+	if r.LogsQL != want {
+		t.Errorf("got %q, want %q", r.LogsQL, want)
+	}
+}
+
 // TestTranslateMultipleFilters covers the canonical combined example from the PLAN:
 //
 //	{app="api", level!="debug"} |= "error"
@@ -73,6 +135,54 @@ func TestTranslateRegexMatcher(t *testing.T) {
 func TestTranslateLineFilter(t *testing.T) {
 	r := parseAndTranslate(t, `{app="api"} |= "error"`)
 	want := `app:="api" AND _msg:"error"`
+	if r.LogsQL != want {
+		t.Errorf("got %q, want %q", r.LogsQL, want)
+	}
+}
+
+func TestTranslatePatternFilter(t *testing.T) {
+	r := parseAndTranslate(t, `{level="warning"} |> "addr <IP4>:<N>"`)
+	for _, want := range []string{
+		`level:="warning"`,
+		`_msg:~"addr[[:space:]]+`,
+		`(?:[0-9]{1,3}\\.){3}[0-9]{1,3}`,
+		`[0-9]+`,
+	} {
+		if !strings.Contains(r.LogsQL, want) {
+			t.Errorf("LogsQL %q does not contain %q", r.LogsQL, want)
+		}
+	}
+}
+
+func TestTranslatePatternFilterWhitespaceIsFlexible(t *testing.T) {
+	r := parseAndTranslate(t, "{service_name=\"grafana-operator\"} |> `<N>.<N>+<N>\tINFO\trunning periodic dashboardfolder resync`")
+	for _, want := range []string{
+		`service_name`,
+		`[[:space:]]+INFO[[:space:]]+running[[:space:]]+periodic[[:space:]]+dashboardfolder[[:space:]]+resync`,
+	} {
+		if !strings.Contains(r.LogsQL, want) {
+			t.Errorf("LogsQL %q does not contain %q", r.LogsQL, want)
+		}
+	}
+}
+
+func TestTranslatePatternFilterMatchesScientificNotation(t *testing.T) {
+	r := parseAndTranslate(t, "{service_name=\"grafana-operator\"} |> `<N>.<N>+<N>\tINFO\trunning periodic dashboard resync`")
+	if !strings.Contains(r.LogsQL, `(?:e|E)?(?:\\+|%20|[[:space:]]+)[0-9]+`) {
+		t.Errorf("LogsQL %q does not contain scientific-notation matcher", r.LogsQL)
+	}
+}
+
+func TestTranslatePatternFilterMatchesPercentEncodedHexFragments(t *testing.T) {
+	r := parseAndTranslate(t, "{service_name=\"vmalert\"} |> `%<N> query=%7Bjob%3D%22etcd%22%7D`")
+	if !strings.Contains(r.LogsQL, `%[0-9A-Fa-f]+`) {
+		t.Errorf("LogsQL %q does not contain percent-encoded hex matcher", r.LogsQL)
+	}
+}
+
+func TestTranslateEmptyLineFilterIsNoop(t *testing.T) {
+	r := parseAndTranslate(t, "{app=`api`} |= ``")
+	want := `app:="api"`
 	if r.LogsQL != want {
 		t.Errorf("got %q, want %q", r.LogsQL, want)
 	}
@@ -152,6 +262,7 @@ func TestTranslateLogfmtStage(t *testing.T) {
 		{`{app="api"} | logfmt`, `app:="api" | unpack_logfmt`},
 		{`{} | logfmt`, `* | unpack_logfmt`},
 		{`{app="api"} |= "error" | logfmt`, `app:="api" AND _msg:"error" | unpack_logfmt`},
+		{`{app="api"} | json | logfmt`, `app:="api"`},
 	}
 	for _, tc := range tests {
 		r := parseAndTranslate(t, tc.query)
@@ -180,6 +291,9 @@ func TestTranslateSumByCountOverTime(t *testing.T) {
 	}
 	if !r.IsAggregation {
 		t.Fatal("expected IsAggregation=true")
+	}
+	if r.AggregationFunc != parser.AggSum {
+		t.Errorf("AggregationFunc = %d, want AggSum", r.AggregationFunc)
 	}
 	if len(r.AggregateBy) != 1 || r.AggregateBy[0] != "detected_level" {
 		t.Errorf("AggregateBy = %v, want [detected_level]", r.AggregateBy)
@@ -211,6 +325,45 @@ func TestTranslateSumNoBy(t *testing.T) {
 	}
 }
 
+func TestTranslateAggregationWithInternalStreamNotEmpty(t *testing.T) {
+	r := parseAndTranslate(t, `sum(count_over_time({level="info", _stream!=""}[2s])) by (_stream)`)
+	if !r.IsAggregation {
+		t.Fatal("expected IsAggregation=true")
+	}
+	if r.LogsQL != `level:="info"` {
+		t.Errorf("LogsQL: got %q, want %q", r.LogsQL, `level:="info"`)
+	}
+	if len(r.AggregateBy) != 1 || r.AggregateBy[0] != "_stream" {
+		t.Errorf("AggregateBy = %v, want [_stream]", r.AggregateBy)
+	}
+}
+
+func TestTranslateAggregationWithInternalStreamIDNotEmpty(t *testing.T) {
+	r := parseAndTranslate(t, `sum(count_over_time({level="info", _stream_id!=""}[2s])) by (_stream_id)`)
+	if !r.IsAggregation {
+		t.Fatal("expected IsAggregation=true")
+	}
+	if r.LogsQL != `level:="info"` {
+		t.Errorf("LogsQL: got %q, want %q", r.LogsQL, `level:="info"`)
+	}
+	if len(r.AggregateBy) != 1 || r.AggregateBy[0] != "_stream_id" {
+		t.Errorf("AggregateBy = %v, want [_stream_id]", r.AggregateBy)
+	}
+}
+
+func TestTranslateAggregationWithInternalTimeNotEmpty(t *testing.T) {
+	r := parseAndTranslate(t, `sum(count_over_time({level="err", _time!=""}[500ms])) by (_time)`)
+	if !r.IsAggregation {
+		t.Fatal("expected IsAggregation=true")
+	}
+	if r.LogsQL != `level:="err"` {
+		t.Errorf("LogsQL: got %q, want %q", r.LogsQL, `level:="err"`)
+	}
+	if len(r.AggregateBy) != 1 || r.AggregateBy[0] != "_time" {
+		t.Errorf("AggregateBy = %v, want [_time]", r.AggregateBy)
+	}
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Error case
 // ────────────────────────────────────────────────────────────────────────────
@@ -226,7 +379,6 @@ func TestTranslateSumNoBy(t *testing.T) {
 // call Translate with a query that the parser rejected.
 func TestTranslateUnsupportedReturnsError(t *testing.T) {
 	unsupportedQueries := []string{
-		`{app="api"} | line_format "{{.msg}}"`,
 		`{app="api"} | label_format app=svc`,
 	}
 	for _, q := range unsupportedQueries {

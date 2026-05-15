@@ -2,6 +2,8 @@
 // converts VictoriaLogs NDJSON records into Loki streams/matrix JSON.
 package loki
 
+import "github.com/netcracker/qubership-logql-to-logsql-proxy/internal/config"
+
 // StreamsResponse is the Loki API JSON body for a successful log query
 // (resultType: "streams").
 type StreamsResponse struct {
@@ -11,8 +13,9 @@ type StreamsResponse struct {
 
 // StreamsData is the data field of a streams response.
 type StreamsData struct {
-	ResultType string       `json:"resultType"`
-	Result     []LokiStream `json:"result"`
+	ResultType    string       `json:"resultType"`
+	EncodingFlags []string     `json:"encodingFlags,omitempty"`
+	Result        []LokiStream `json:"result"`
 }
 
 // LokiStream is a single stream entry: a label set and its matching log lines.
@@ -20,6 +23,58 @@ type StreamsData struct {
 type LokiStream struct {
 	Stream map[string]string `json:"stream"`
 	Values [][2]string       `json:"values"`
+}
+
+// EnrichedLogEntry is the proxy's internal normalized view of a single log
+// record. It preserves the classic Loki stream tuple fields while also
+// classifying the record's non-special fields into categories that can later
+// back richer Grafana log-detail views without another parser refactor.
+type EnrichedLogEntry struct {
+	Timestamp          string
+	Line               string
+	IndexedLabels      map[string]string
+	ParsedFields       map[string]string
+	StructuredMetadata map[string]string
+	OtherFields        map[string]string
+}
+
+// EnrichedLokiStream is the internal companion to LokiStream. The external
+// JSON contract still uses Stream+Values, but the proxy keeps the classified
+// entries in memory so future response-shaping changes do not need to
+// rediscover field categories from raw VictoriaLogs records.
+type EnrichedLokiStream struct {
+	Stream  map[string]string
+	Entries []EnrichedLogEntry
+}
+
+// EnrichmentConfig controls how vlogs.Records are categorized into enriched
+// log-entry buckets. It currently mirrors the LabelsConfig classification
+// hints because the proxy has not yet introduced a separate log-detail model.
+type EnrichmentConfig struct {
+	Labels                     config.LabelsConfig
+	UseIndexedLabelsAsStream   bool
+	UseStreamFieldAsBaseLabels bool
+}
+
+// CategorizedStreamsResponse is an opt-in Loki streams response that emits
+// per-entry metadata alongside the classic [timestamp, line] tuple.
+type CategorizedStreamsResponse struct {
+	Status string                 `json:"status"`
+	Data   CategorizedStreamsData `json:"data"`
+}
+
+// CategorizedStreamsData is the data field for categorize-labels responses.
+type CategorizedStreamsData struct {
+	ResultType    string                  `json:"resultType"`
+	EncodingFlags []string                `json:"encodingFlags,omitempty"`
+	Result        []CategorizedLokiStream `json:"result"`
+}
+
+// CategorizedLokiStream is a Loki stream whose values are 3-tuples:
+// [timestamp_nanoseconds_string, log_line, metadata_object].
+type CategorizedLokiStream struct {
+	Stream map[string]string `json:"stream"`
+	Values [][]interface{}   `json:"values"`
 }
 
 // MatrixResponse is the Loki API JSON body for a successful metric query
@@ -40,6 +95,26 @@ type MatrixData struct {
 type MatrixSeries struct {
 	Metric map[string]string `json:"metric"`
 	Values [][]interface{}   `json:"values"`
+}
+
+// VectorResponse is the Loki API JSON body for a successful instant vector
+// query (resultType: "vector").
+type VectorResponse struct {
+	Status string     `json:"status"`
+	Data   VectorData `json:"data"`
+}
+
+// VectorData is the data field of a vector response.
+type VectorData struct {
+	ResultType string         `json:"resultType"`
+	Result     []VectorSample `json:"result"`
+}
+
+// VectorSample is a single sample in a vector result.
+// Value is a [unix_seconds_float, sample_string] pair.
+type VectorSample struct {
+	Metric map[string]string `json:"metric"`
+	Value  []interface{}     `json:"value"`
 }
 
 // LabelsResponse is the Loki API JSON body for GET /loki/api/v1/labels.

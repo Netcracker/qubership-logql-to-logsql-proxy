@@ -221,9 +221,32 @@ proxy:
     defaultLimit: 1000
 
   labels:
-    # Static label allowlist returned by /loki/api/v1/labels.
-    # Empty = discover dynamically from VictoriaLogs /field_names on every request.
-    knownLabels: []
+    # Static label allowlist returned by /loki/api/v1/labels and /detected_labels.
+    # Keep this intentionally small for Grafana Logs Drilldown.
+    knownLabels:
+      - service_name
+      - detected_level
+      - namespace
+      - container
+      - nodename
+    # Optional classification hints for non-label fields.
+    knownParsedFields:
+      - parse_format
+      - parse_status
+      - parse_level_unknown
+      - source_level
+      - level
+      - pod
+    knownStructuredMetadata:
+      - labels.component
+      - labels.tier
+      - log_category
+    # Always suppress these from generic detected_fields-style discovery.
+    excludedFields:
+      - _msg
+      - _time
+      - _stream
+      - _stream_id
     metadataCacheTTL: "5m"
     metadataCacheSize: 256
 

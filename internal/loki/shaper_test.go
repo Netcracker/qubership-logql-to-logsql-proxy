@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/config"
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/loki"
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/vlogs"
 )
@@ -160,6 +161,182 @@ func TestGroupEmptyMsgField(t *testing.T) {
 	}
 }
 
+func TestEnrichedStreamClassification(t *testing.T) {
+	g := loki.NewEnrichedStreamGrouper(nil, loki.EnrichmentConfig{
+		Labels: config.LabelsConfig{
+			KnownLabels:             []string{"service_name", "detected_level"},
+			KnownParsedFields:       []string{"parse_format", "parse_status"},
+			KnownStructuredMetadata: []string{"labels.component"},
+			ExcludedFields:          []string{"_stream", "_stream_id"},
+			LabelRemap:              map[string]string{"detected_level": "level"},
+		},
+	}, 100)
+
+	_ = g.Add(vlogs.Record{
+		"_time":            "2024-01-15T12:00:00Z",
+		"_msg":             "hello world",
+		"container":        "api",
+		"level":            "warn",
+		"parse_format":     "klog",
+		"parse_status":     "success",
+		"labels.component": "apiserver",
+		"hostname":         "node-1",
+		"_stream":          `{container="api"}`,
+	})
+
+	streams := g.EnrichedStreams()
+	if len(streams) != 1 {
+		t.Fatalf("expected 1 enriched stream, got %d", len(streams))
+	}
+	if len(streams[0].Entries) != 1 {
+		t.Fatalf("expected 1 enriched entry, got %d", len(streams[0].Entries))
+	}
+	entry := streams[0].Entries[0]
+	if entry.Line != "hello world" {
+		t.Fatalf("Line = %q, want %q", entry.Line, "hello world")
+	}
+	if entry.IndexedLabels["service_name"] != "api" {
+		t.Fatalf("IndexedLabels = %v, want service_name=api", entry.IndexedLabels)
+	}
+	if entry.IndexedLabels["detected_level"] != "warn" {
+		t.Fatalf("IndexedLabels = %v, want remapped level field to expose detected_level", entry.IndexedLabels)
+	}
+	if entry.ParsedFields["parse_format"] != "klog" || entry.ParsedFields["parse_status"] != "success" {
+		t.Fatalf("ParsedFields = %v", entry.ParsedFields)
+	}
+	if entry.StructuredMetadata["labels.component"] != "apiserver" {
+		t.Fatalf("StructuredMetadata = %v", entry.StructuredMetadata)
+	}
+	if entry.OtherFields["hostname"] != "node-1" {
+		t.Fatalf("OtherFields = %v", entry.OtherFields)
+	}
+	if _, ok := entry.OtherFields["_stream"]; ok {
+		t.Fatalf("excluded field leaked into OtherFields: %v", entry.OtherFields)
+	}
+}
+
+func TestCategorizedStreamsShapeUsesIndexedLabelsAndMetadataTuple(t *testing.T) {
+	g := loki.NewEnrichedStreamGrouper(nil, loki.EnrichmentConfig{
+		Labels: config.LabelsConfig{
+			KnownLabels:             []string{"service_name", "detected_level", "namespace", "container"},
+			KnownParsedFields:       []string{"parse_format", "parse_status"},
+			KnownStructuredMetadata: []string{"labels.component"},
+			ExcludedFields:          []string{"_stream", "_stream_id"},
+			LabelRemap:              map[string]string{"detected_level": "level"},
+		},
+		UseIndexedLabelsAsStream:   true,
+		UseStreamFieldAsBaseLabels: true,
+	}, 100)
+
+	_ = g.Add(vlogs.Record{
+		"_time":            "2024-01-15T12:00:00Z",
+		"_msg":             "hello world",
+		"_stream":          `{container="api",namespace="prod"}`,
+		"container":        "api",
+		"namespace":        "prod",
+		"nodename":         "node-a",
+		"level":            "warn",
+		"parse_format":     "klog",
+		"labels.component": "apiserver",
+		"hostname":         "node-1",
+	})
+
+	streams := g.CategorizedStreams()
+	if len(streams) != 1 {
+		t.Fatalf("expected 1 categorized stream, got %d", len(streams))
+	}
+	stream := streams[0]
+	if stream.Stream["service_name"] != "api" || stream.Stream["detected_level"] != "warn" {
+		t.Fatalf("unexpected categorized stream labels: %v", stream.Stream)
+	}
+	if stream.Stream["container"] != "api" || stream.Stream["namespace"] != "prod" {
+		t.Fatalf("expected _stream labels to be preserved, got %v", stream.Stream)
+	}
+	if _, ok := stream.Stream["hostname"]; ok {
+		t.Fatalf("non-indexed field leaked into stream labels: %v", stream.Stream)
+	}
+	if _, ok := stream.Stream["nodename"]; ok {
+		t.Fatalf("expected non-_stream known label nodename to stay out of indexed labels: %v", stream.Stream)
+	}
+	if len(stream.Values) != 1 || len(stream.Values[0]) != 3 {
+		t.Fatalf("expected single 3-tuple, got %#v", stream.Values)
+	}
+	meta, ok := stream.Values[0][2].(map[string]map[string]string)
+	if !ok {
+		t.Fatalf("tuple metadata type = %T, want map[string]map[string]string", stream.Values[0][2])
+	}
+	if meta["parsed"]["parse_format"] != "klog" {
+		t.Fatalf("parsed metadata = %v", meta["parsed"])
+	}
+	if meta["parsed"]["labels.component"] != "apiserver" ||
+		meta["parsed"]["hostname"] != "node-1" {
+		t.Fatalf("parsed metadata = %v", meta["parsed"])
+	}
+	if _, ok := meta["structuredMetadata"]; ok {
+		t.Fatalf("structured metadata should be empty in categorized shaping: %v", meta["structuredMetadata"])
+	}
+}
+
+func TestSyntheticServiceNamePrefersContainerOverGenericName(t *testing.T) {
+	g := loki.NewEnrichedStreamGrouper(nil, loki.EnrichmentConfig{
+		Labels: config.LabelsConfig{
+			KnownLabels: []string{"service_name", "container", "namespace"},
+		},
+		UseIndexedLabelsAsStream:   true,
+		UseStreamFieldAsBaseLabels: true,
+	}, 100)
+
+	_ = g.Add(vlogs.Record{
+		"_time":     "2024-01-15T12:00:00Z",
+		"_msg":      "hello world",
+		"_stream":   `{container="vlsingle-k8s",namespace="monitoring"}`,
+		"container": "vlsingle-k8s",
+		"namespace": "monitoring",
+		"name":      "k8s",
+	})
+
+	streams := g.Streams()
+	if len(streams) != 1 {
+		t.Fatalf("expected 1 stream, got %d", len(streams))
+	}
+	if got := streams[0].Stream["service_name"]; got != "vlsingle-k8s" {
+		t.Fatalf("service_name = %q, want %q", got, "vlsingle-k8s")
+	}
+}
+
+func TestDetectedLevelPrefersExplicitDetectedLevelOverRemappedLevel(t *testing.T) {
+	g := loki.NewEnrichedStreamGrouper(nil, loki.EnrichmentConfig{
+		Labels: config.LabelsConfig{
+			KnownLabels: []string{"service_name", "detected_level", "container", "namespace"},
+			LabelRemap:  map[string]string{"detected_level": "level"},
+		},
+		UseIndexedLabelsAsStream:   true,
+		UseStreamFieldAsBaseLabels: true,
+	}, 100)
+
+	_ = g.Add(vlogs.Record{
+		"_time":          "2024-01-15T12:00:00Z",
+		"_msg":           "hello world",
+		"_stream":        `{container="cloud-provider-kind",namespace="kube-system"}`,
+		"container":      "cloud-provider-kind",
+		"namespace":      "kube-system",
+		"level":          "info",
+		"detected_level": "info",
+		"source_level":   "I",
+	})
+
+	streams := g.Streams()
+	if len(streams) != 1 {
+		t.Fatalf("expected 1 stream, got %d", len(streams))
+	}
+	if got := streams[0].Stream["detected_level"]; got != "info" {
+		t.Fatalf("detected_level = %q, want %q", got, "info")
+	}
+	if got := streams[0].Stream["level"]; got != "info" {
+		t.Fatalf("level = %q, want %q", got, "info")
+	}
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // ShapeMatrix tests
 // ────────────────────────────────────────────────────────────────────────────
@@ -228,5 +405,22 @@ func TestMatrixEmptyBuckets(t *testing.T) {
 	}
 	if len(series[0].Values) != 0 {
 		t.Errorf("expected 0 values, got %d", len(series[0].Values))
+	}
+}
+
+func TestInvalidTimestampFallsBackToZero(t *testing.T) {
+	g := loki.NewStreamGrouper([]string{"app"}, 10)
+	_ = g.Add(vlogs.Record{
+		"_time": "not-a-time",
+		"_msg":  "hello",
+		"app":   "api",
+	})
+
+	streams := g.Streams()
+	if len(streams) != 1 {
+		t.Fatalf("expected 1 stream, got %d", len(streams))
+	}
+	if got := streams[0].Values[0][0]; got != "0" {
+		t.Fatalf("timestamp = %q, want %q", got, "0")
 	}
 }
