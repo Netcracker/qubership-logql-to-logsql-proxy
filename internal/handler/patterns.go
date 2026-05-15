@@ -104,7 +104,7 @@ func (d *Deps) Patterns(ctx *fasthttp.RequestCtx) {
 			return nil
 		}
 
-		// Parse the record timestamp; skip unparseable entries.
+		// Parse the record timestamp; skip unparsable entries.
 		ts, tErr := time.Parse(time.RFC3339Nano, rec["_time"])
 		if tErr != nil {
 			ts, tErr = time.Parse(time.RFC3339, rec["_time"])
