@@ -546,6 +546,27 @@ func TestDetectedFieldValuesUsesRemapAndScopedQuery(t *testing.T) {
 	}
 }
 
+func TestDetectedFieldValuesNormalizesDetectedLevelValues(t *testing.T) {
+	deps := testDeps(&stubVL{
+		fieldValuesFn: func(_ context.Context, req vlogs.FieldValuesRequest) ([]string, error) {
+			return []string{"err", "error", "INFO"}, nil
+		},
+	})
+
+	ctx := newCtx(`/loki/api/v1/detected_field/detected_level/values?start=1705320000&end=1705323600&query={service_name="vmalert"}`)
+	ctx.SetUserValue("name", "detected_level")
+	deps.DetectedFieldValues(ctx)
+
+	if ctx.Response.StatusCode() != fasthttp.StatusOK {
+		t.Fatalf("status = %d, want 200 body=%s", ctx.Response.StatusCode(), ctx.Response.Body())
+	}
+
+	body := decodeBody[loki.LabelValuesResponse](t, ctx)
+	if len(body.Data) != 2 || body.Data[0] != "error" || body.Data[1] != "info" {
+		t.Fatalf("unexpected normalized values: %+v", body.Data)
+	}
+}
+
 func TestLabelValuesUsesRemapForSyntheticLabelName(t *testing.T) {
 	var got vlogs.FieldValuesRequest
 	deps := testDeps(&stubVL{
@@ -634,6 +655,38 @@ func TestAggregationReturnsOriginalLabelNameAfterRemap(t *testing.T) {
 		if _, ok := series.Metric["level"]; ok {
 			t.Fatalf("metric unexpectedly exposes remapped key 'level': %+v", series.Metric)
 		}
+	}
+}
+
+func TestAggregationNormalizesDetectedLevelFromRawLevelField(t *testing.T) {
+	base := time.Unix(1705320000, 0).UTC()
+	deps := testDeps(&stubVL{
+		queryLogsFn: func(_ context.Context, req vlogs.LogQueryRequest, fn func(vlogs.Record) error) error {
+			records := []vlogs.Record{
+				{"_time": base.Format(time.RFC3339Nano), "_msg": "r1", "level": "err"},
+			}
+			for _, rec := range records {
+				if err := fn(rec); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	})
+
+	ctx := newCtx(`/loki/api/v1/query_range?query=sum+by+(detected_level)+(count_over_time({app="api"}[2s]))&start=1705320000&end=1705323600&step=2`)
+	deps.QueryRange(ctx)
+
+	if ctx.Response.StatusCode() != fasthttp.StatusOK {
+		t.Fatalf("status = %d, want 200 body=%s", ctx.Response.StatusCode(), ctx.Response.Body())
+	}
+
+	body := decodeBody[loki.MatrixResponse](t, ctx)
+	if len(body.Data.Result) != 1 {
+		t.Fatalf("expected 1 series, got %d", len(body.Data.Result))
+	}
+	if got := body.Data.Result[0].Metric["detected_level"]; got != "error" {
+		t.Fatalf("detected_level = %q, want %q", got, "error")
 	}
 }
 

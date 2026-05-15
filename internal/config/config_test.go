@@ -31,6 +31,9 @@ func TestLoadAppliesDefaultsFileEnvAndPasswordFile(t *testing.T) {
 		"    passwordFile: " + passFile.Name(),
 		"labels:",
 		"  metadataCacheTTL: 30s",
+		"drilldown:",
+		"  maxQuerySeries: 123",
+		"  version: custom",
 		"log:",
 		"  format: text",
 		"",
@@ -74,6 +77,12 @@ func TestLoadAppliesDefaultsFileEnvAndPasswordFile(t *testing.T) {
 	}
 	if cfg.Labels.MetadataCacheTTL != 30*time.Second {
 		t.Errorf("MetadataCacheTTL = %v, want %v", cfg.Labels.MetadataCacheTTL, 30*time.Second)
+	}
+	if cfg.Drilldown.MaxQuerySeries != 123 {
+		t.Errorf("Drilldown.MaxQuerySeries = %d, want 123", cfg.Drilldown.MaxQuerySeries)
+	}
+	if cfg.Drilldown.Version != "custom" {
+		t.Errorf("Drilldown.Version = %q, want %q", cfg.Drilldown.Version, "custom")
 	}
 	if got := cfg.Labels.KnownLabels; len(got) != 3 || got[0] != "app" || got[1] != "team" || got[2] != "env" {
 		t.Errorf("KnownLabels = %v, want [app team env]", got)
@@ -154,6 +163,12 @@ func TestLoadUsesCuratedKnownLabelsByDefault(t *testing.T) {
 	}
 	if len(cfg.Labels.ExcludedFields) == 0 {
 		t.Fatal("expected ExcludedFields defaults to be populated")
+	}
+	if cfg.Drilldown.MaxEntriesLimitPerQuery == 0 {
+		t.Fatal("expected Drilldown defaults to be populated")
+	}
+	if len(cfg.Drilldown.DiscoverServiceName) == 0 {
+		t.Fatal("expected Drilldown.DiscoverServiceName defaults to be populated")
 	}
 }
 

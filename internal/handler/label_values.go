@@ -99,6 +99,9 @@ func (d *Deps) DetectedFieldValues(ctx *fasthttp.RequestCtx) {
 			"failed to retrieve field values from VictoriaLogs")
 		return
 	}
+	if name == "detected_level" {
+		values = normalizeDetectedLevelValues(values)
+	}
 
 	writeJSON(ctx, fasthttp.StatusOK, loki.LabelValuesResponse{Status: "success", Data: values})
 }
@@ -148,4 +151,25 @@ func (d *Deps) syntheticServiceNameValues(ctx *fasthttp.RequestCtx, start, end t
 
 	sort.Strings(values)
 	return values, nil
+}
+
+func normalizeDetectedLevelValues(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		normalized := fieldclass.NormalizeDetectedLevel(value)
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		out = append(out, normalized)
+	}
+	sort.Strings(out)
+	return out
 }

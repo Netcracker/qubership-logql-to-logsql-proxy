@@ -115,61 +115,18 @@ flowchart TD
 * [ ] Add metrics
 * [ ] Improve logs to show original errors
 * [ ] Measure performance and resource usage
-* [ ] Make response for `drilldown-limits` configurable
 * [ ] Check the logql-to-logsql translator
       [https://github.com/VictoriaMetrics-community/logql-to-logsql/](https://github.com/VictoriaMetrics-community/logql-to-logsql/)
       and maybe reuse it
 
 ### Known issues
 
-`DataSources`:
-
-* [ ] Show an error during manual DataSource add in the Grafana UI
-  * The proxy most likely returns empty data instead of the expected `1`
-
 `Explorer`:
 
-* [ ] Explore doesn't work
-
-`Log Drilldown` / `Log Summary`:
-
-* [ ] Default view with `service` label doesn't work
+* [ ] Some Explore-generated LogQL constructs may still be unsupported or unverified
 
 `Logs Drilldown` / `Logs Details`:
 
-* [ ] `Log Levels` shows an empty list of levels
 * [ ] `Log Volume` shows incorrect data
 * [ ] There are no level colors in histograms
-* [ ] Some label histograms fail with the error
-
-    ```bash
-    "{\"status\":\"error\",\"errorType\":\"execution\",\"error\":\"VictoriaLogs query failed: QueryLogs: VL returned HTTP 400: cannot parse query [namespace:=\\\"consul-service\\\" AND NOT _stream:=\\\"\\\"]: unexpected token \\\"=\\\" instead of '{' in _stream filter; context: [space:=\\\"consul-service\\\" AND NOT _stream:=]\"}\n"
-    ```
-
 * [ ] In `Fields`, `Show panels with errors` doesn't work
-* [ ] In `Patterns`, it seems to show incorrect graphs
-* [ ] Some services' log view crashes with the error:
-
-    ```bash
-    An unexpected error happened
-      Details
-        SyntaxError: Invalid regular expression: /\b([2026-03-16T16:22:37+0000][DEBUG][class|_stream|_stream_id|class|container|date|hostname|labels.app|labels.pod-template-hash|level|namespace|nodename|parse_format|parse_status|pod|source_level|stream|thread)(?:[=:]{1})\b/g: Range out of order in character class
-
-        at r (https://grafana.kubernetes.org/public/build/3688.3a2e7e47341617a764ef.js:1:89431)
-        at https://grafana.kubernetes.org/public/build/3688.3a2e7e47341617a764ef.js:1:87961
-        at div
-        at div
-    ```
-
-    or
-
-    ```bash
-    SyntaxError: Invalid regular expression:
-    /\b(GRPCClient(subType|_stream|_stream_id|container|date|hostname|labels.app.kubernetes.io/component|labels.app.kubernetes.io/instance|labels.app.kubernetes.io/managed-by|labels.app.kubernetes.io/name|labels.app.kubernetes.io/part-of|labels.app.kubernetes.io/version|labels.controller-revision-hash|labels.pod-template-generation|level|namespace|nodename|parse_format|parse_level_unknown|parse_status|pod|stream|svc|traceparent)(?:[=:]{1})\b/g:
-    Unterminated group
-
-    at r (https://grafana.kubernetes.org/public/build/3688.3a2e7e47341617a764ef.js:1:89431)
-    at https://grafana.kubernetes.org/public/build/3688.3a2e7e47341617a764ef.js:1:87961
-    ```
-
-* [ ] `Include` patterns doesn't work

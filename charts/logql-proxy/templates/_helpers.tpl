@@ -142,6 +142,30 @@ labels:
   metadataCacheTTL: {{ .Values.proxy.labels.metadataCacheTTL | quote }}
   metadataCacheSize: {{ .Values.proxy.labels.metadataCacheSize }}
 
+drilldown:
+  discoverLogLevels: {{ .Values.proxy.drilldown.discoverLogLevels }}
+  discoverServiceName:
+    {{- toYaml .Values.proxy.drilldown.discoverServiceName | nindent 4 }}
+  logLevelFields:
+    {{- toYaml .Values.proxy.drilldown.logLevelFields | nindent 4 }}
+  maxEntriesLimitPerQuery: {{ .Values.proxy.drilldown.maxEntriesLimitPerQuery }}
+  maxLineSizeTruncate: {{ .Values.proxy.drilldown.maxLineSizeTruncate }}
+  maxQueryBytesRead: {{ .Values.proxy.drilldown.maxQueryBytesRead | quote }}
+  maxQueryLength: {{ .Values.proxy.drilldown.maxQueryLength | quote }}
+  maxQueryLookback: {{ .Values.proxy.drilldown.maxQueryLookback | quote }}
+  maxQueryRange: {{ .Values.proxy.drilldown.maxQueryRange | quote }}
+  maxQuerySeries: {{ .Values.proxy.drilldown.maxQuerySeries }}
+  metricAggregationEnabled: {{ .Values.proxy.drilldown.metricAggregationEnabled }}
+  otlpIndexLabelAttributes:
+    {{- toYaml .Values.proxy.drilldown.otlpIndexLabelAttributes | nindent 4 }}
+  patternPersistenceEnabled: {{ .Values.proxy.drilldown.patternPersistenceEnabled }}
+  queryTimeout: {{ .Values.proxy.drilldown.queryTimeout | quote }}
+  retentionPeriod: {{ .Values.proxy.drilldown.retentionPeriod | quote }}
+  volumeEnabled: {{ .Values.proxy.drilldown.volumeEnabled }}
+  volumeMaxSeries: {{ .Values.proxy.drilldown.volumeMaxSeries }}
+  patternIngesterEnabled: {{ .Values.proxy.drilldown.patternIngesterEnabled }}
+  version: {{ .Values.proxy.drilldown.version | quote }}
+
 log:
   level: {{ .Values.proxy.log.level | quote }}
   format: {{ .Values.proxy.log.format | quote }}

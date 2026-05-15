@@ -332,8 +332,47 @@ func TestDetectedLevelPrefersExplicitDetectedLevelOverRemappedLevel(t *testing.T
 	if got := streams[0].Stream["detected_level"]; got != "info" {
 		t.Fatalf("detected_level = %q, want %q", got, "info")
 	}
-	if got := streams[0].Stream["level"]; got != "info" {
-		t.Fatalf("level = %q, want %q", got, "info")
+	if _, ok := streams[0].Stream["level"]; ok {
+		t.Fatalf("raw level must not be exposed as indexed label: %v", streams[0].Stream)
+	}
+}
+
+func TestDetectedLevelNormalizesErrAndDoesNotExposeRawLevel(t *testing.T) {
+	g := loki.NewEnrichedStreamGrouper(nil, loki.EnrichmentConfig{
+		Labels: config.LabelsConfig{
+			KnownLabels: []string{"service_name", "detected_level", "container", "namespace"},
+			LabelRemap:  map[string]string{"detected_level": "level"},
+		},
+		UseIndexedLabelsAsStream:   true,
+		UseStreamFieldAsBaseLabels: true,
+	}, 100)
+
+	_ = g.Add(vlogs.Record{
+		"_time":     "2024-01-15T12:00:00Z",
+		"_msg":      "hello world",
+		"_stream":   `{container="logging-fluentbit",namespace="logging"}`,
+		"container": "logging-fluentbit",
+		"namespace": "logging",
+		"level":     "err",
+	})
+
+	streams := g.Streams()
+	if len(streams) != 1 {
+		t.Fatalf("expected 1 stream, got %d", len(streams))
+	}
+	if got := streams[0].Stream["detected_level"]; got != "error" {
+		t.Fatalf("detected_level = %q, want %q", got, "error")
+	}
+	if _, ok := streams[0].Stream["level"]; ok {
+		t.Fatalf("raw level must not be exposed as indexed label: %v", streams[0].Stream)
+	}
+
+	enriched := g.EnrichedStreams()
+	if len(enriched) != 1 || len(enriched[0].Entries) != 1 {
+		t.Fatalf("expected 1 enriched entry, got %+v", enriched)
+	}
+	if got := enriched[0].Entries[0].OtherFields["level"]; got != "err" {
+		t.Fatalf("raw level field = %q, want %q", got, "err")
 	}
 }
 

@@ -212,12 +212,17 @@ func (g *StreamGrouper) enrichRecord(rec vlogs.Record) EnrichedLogEntry {
 				// primarily come from the original stream selector (_stream) plus
 				// synthetic compatibility labels such as detected_level/service_name.
 				if name != "service_name" && name != "detected_level" {
+					entry.OtherFields[k] = v
 					break
 				}
 			}
 			if name == "detected_level" {
 				if direct := rec["detected_level"]; direct != "" && k != "detected_level" {
+					entry.OtherFields[k] = v
 					break
+				}
+				if k != "detected_level" {
+					entry.OtherFields[k] = v
 				}
 				v = fieldclass.NormalizeDetectedLevel(v)
 			}
@@ -235,11 +240,6 @@ func (g *StreamGrouper) enrichRecord(rec vlogs.Record) EnrichedLogEntry {
 	if fieldclass.IsKnownLabel("service_name", g.enrichment.Labels) && entry.IndexedLabels["service_name"] == "" {
 		if val := syntheticServiceName(rec); val != "" {
 			entry.IndexedLabels["service_name"] = val
-		}
-	}
-	if g.enrichment.UseStreamFieldAsBaseLabels {
-		if val := rec["level"]; val != "" {
-			entry.IndexedLabels["level"] = val
 		}
 	}
 

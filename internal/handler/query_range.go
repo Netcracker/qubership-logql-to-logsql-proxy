@@ -13,6 +13,7 @@ import (
 
 	"github.com/valyala/fasthttp"
 
+	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/fieldclass"
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/loki"
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/parser"
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/translator"
@@ -391,6 +392,9 @@ func (d *Deps) handleAggregationQuery(
 			outLabel := label
 			if original := inverseRemap[label]; original != "" {
 				outLabel = original
+			}
+			if outLabel == "detected_level" {
+				val = fieldclass.NormalizeDetectedLevel(val)
 			}
 			metric[outLabel] = val
 			keyParts = append(keyParts, outLabel, val)

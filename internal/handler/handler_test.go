@@ -79,6 +79,7 @@ func defaultConfig() *config.Config {
 	cfg.Labels.KnownParsedFields = []string{"parse_format", "parse_status", "file", "source_level", "klog_date", "date", "pid"}
 	cfg.Labels.KnownStructuredMetadata = []string{"labels.component", "labels.tier", "log_category"}
 	cfg.Labels.ExcludedFields = []string{"_msg", "_time", "_stream", "_stream_id"}
+	cfg.Drilldown = config.DefaultDrilldownConfig()
 	cfg.Labels.MetadataCacheTTL = 5 * time.Minute
 	cfg.Labels.MetadataCacheSize = 256
 	cfg.Log.Level = "info"
@@ -994,6 +995,51 @@ func TestDrilldownLimitsStub(t *testing.T) {
 	}
 	if len(names) == 0 || names[0] != "labels.app.kubernetes.io/name" {
 		t.Errorf("discover_service_name[0] = %q, want %q", names[0], "labels.app.kubernetes.io/name")
+	}
+}
+
+func TestDrilldownLimitsUsesConfiguredResponse(t *testing.T) {
+	deps := newDeps(&mockVL{})
+	deps.Cfg.Drilldown.DiscoverLogLevels = false
+	deps.Cfg.Drilldown.DiscoverServiceName = []string{"svc", "app"}
+	deps.Cfg.Drilldown.MaxQuerySeries = 42
+	deps.Cfg.Drilldown.Version = "test-version"
+	deps.Cfg.Drilldown.OTLPIndexLabelAttributes = []string{"service.name", "k8s.namespace.name"}
+
+	addr, cleanup := newTestServer(t, buildHandler(deps))
+	defer cleanup()
+
+	resp, err := http.Get(addr + "/loki/api/v1/drilldown-limits")
+	if err != nil {
+		t.Fatalf("GET /loki/api/v1/drilldown-limits: %v", err)
+	}
+	defer closeRespBody(t, resp)
+
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	limits := body["limits"].(map[string]any)
+	if got := limits["discover_log_levels"]; got != false {
+		t.Fatalf("discover_log_levels = %#v, want false", got)
+	}
+	if got := body["version"]; got != "test-version" {
+		t.Fatalf("version = %#v, want %q", got, "test-version")
+	}
+	if got := limits["max_query_series"]; got != float64(42) {
+		t.Fatalf("max_query_series = %#v, want 42", got)
+	}
+	namesRaw := limits["discover_service_name"].([]any)
+	if len(namesRaw) != 2 || namesRaw[0] != "svc" || namesRaw[1] != "app" {
+		t.Fatalf("discover_service_name = %#v, want [svc app]", namesRaw)
+	}
+	otlp := limits["otlp_config"].(map[string]any)
+	resource := otlp["resource_attributes"].(map[string]any)
+	attrsCfg := resource["attributes_config"].([]any)
+	entry := attrsCfg[0].(map[string]any)
+	attrs := entry["attributes"].([]any)
+	if len(attrs) != 2 || attrs[0] != "service.name" || attrs[1] != "k8s.namespace.name" {
+		t.Fatalf("otlp index label attributes = %#v, want [service.name k8s.namespace.name]", attrs)
 	}
 }
 

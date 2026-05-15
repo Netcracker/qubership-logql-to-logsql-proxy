@@ -23,11 +23,12 @@ import (
 
 // Config is the complete proxy configuration.
 type Config struct {
-	Server ServerConfig
-	VLogs  VLogsConfig
-	Limits LimitsConfig
-	Labels LabelsConfig
-	Log    LogConfig
+	Server    ServerConfig
+	VLogs     VLogsConfig
+	Limits    LimitsConfig
+	Labels    LabelsConfig
+	Drilldown DrilldownConfig
+	Log       LogConfig
 }
 
 // ServerConfig controls the inbound HTTP server.
@@ -109,6 +110,30 @@ type LabelsConfig struct {
 	MetadataCacheSize int           // max cache entries, default: 256
 }
 
+// DrilldownConfig controls the synthetic response returned by
+// /loki/api/v1/drilldown-limits for Grafana Logs Drilldown compatibility.
+type DrilldownConfig struct {
+	DiscoverLogLevels         bool     `yaml:"discoverLogLevels"`
+	DiscoverServiceName       []string `yaml:"discoverServiceName"`
+	LogLevelFields            []string `yaml:"logLevelFields"`
+	MaxEntriesLimitPerQuery   int      `yaml:"maxEntriesLimitPerQuery"`
+	MaxLineSizeTruncate       bool     `yaml:"maxLineSizeTruncate"`
+	MaxQueryBytesRead         string   `yaml:"maxQueryBytesRead"`
+	MaxQueryLength            string   `yaml:"maxQueryLength"`
+	MaxQueryLookback          string   `yaml:"maxQueryLookback"`
+	MaxQueryRange             string   `yaml:"maxQueryRange"`
+	MaxQuerySeries            int      `yaml:"maxQuerySeries"`
+	MetricAggregationEnabled  bool     `yaml:"metricAggregationEnabled"`
+	OTLPIndexLabelAttributes  []string `yaml:"otlpIndexLabelAttributes"`
+	PatternPersistenceEnabled bool     `yaml:"patternPersistenceEnabled"`
+	QueryTimeout              string   `yaml:"queryTimeout"`
+	RetentionPeriod           string   `yaml:"retentionPeriod"`
+	VolumeEnabled             bool     `yaml:"volumeEnabled"`
+	VolumeMaxSeries           int      `yaml:"volumeMaxSeries"`
+	PatternIngesterEnabled    bool     `yaml:"patternIngesterEnabled"`
+	Version                   string   `yaml:"version"`
+}
+
 // LogConfig controls structured logging output.
 type LogConfig struct {
 	Level  string // "debug"|"info"|"warn"|"error", default: "info"
@@ -120,11 +145,12 @@ type LogConfig struct {
 // ────────────────────────────────────────────────────────────────────────────
 
 type rawConfig struct {
-	Server rawServerConfig `yaml:"server"`
-	VLogs  rawVLogsConfig  `yaml:"vlogs"`
-	Limits rawLimitsConfig `yaml:"limits"`
-	Labels rawLabelsConfig `yaml:"labels"`
-	Log    rawLogConfig    `yaml:"log"`
+	Server    rawServerConfig `yaml:"server"`
+	VLogs     rawVLogsConfig  `yaml:"vlogs"`
+	Limits    rawLimitsConfig `yaml:"limits"`
+	Labels    rawLabelsConfig `yaml:"labels"`
+	Drilldown DrilldownConfig `yaml:"drilldown"`
+	Log       rawLogConfig    `yaml:"log"`
 }
 
 type rawServerConfig struct {
@@ -235,9 +261,100 @@ func defaultRaw() *rawConfig {
 	}
 	r.Labels.MetadataCacheTTL = "5m"
 	r.Labels.MetadataCacheSize = 256
+	r.Drilldown = DefaultDrilldownConfig()
 	r.Log.Level = "info"
 	r.Log.Format = "json"
 	return r
+}
+
+// DefaultDrilldownConfig returns the default synthetic
+// /loki/api/v1/drilldown-limits response payload settings.
+func DefaultDrilldownConfig() DrilldownConfig {
+	return DrilldownConfig{
+		DiscoverLogLevels: true,
+		DiscoverServiceName: []string{
+			"labels.app.kubernetes.io/name",
+			"labels.app.kubernetes.io/component",
+			"labels.k8s-app",
+			"labels.app",
+			"app",
+			"application",
+			"app_name",
+			"name",
+			"app_kubernetes_io_name",
+			"component",
+			"workload",
+			"k8s.deployment.name",
+			"k8s.statefulset.name",
+			"k8s.daemonset.name",
+			"k8s.job.name",
+			"k8s.cronjob.name",
+			"container",
+			"k8s.container.name",
+			"container.name",
+			"container_name",
+			"k8s_container_name",
+			"service",
+			"service.name",
+			"service_name",
+			"job",
+			"k8s_job_name",
+		},
+		LogLevelFields: []string{
+			"level",
+			"LEVEL",
+			"Level",
+			"log.level",
+			"severity",
+			"SEVERITY",
+			"Severity",
+			"SeverityText",
+			"lvl",
+			"LVL",
+			"Lvl",
+			"severity_text",
+			"Severity_Text",
+			"SEVERITY_TEXT",
+		},
+		MaxEntriesLimitPerQuery:  5000,
+		MaxLineSizeTruncate:      false,
+		MaxQueryBytesRead:        "0B",
+		MaxQueryLength:           "30d1h",
+		MaxQueryLookback:         "31d",
+		MaxQueryRange:            "0s",
+		MaxQuerySeries:           500,
+		MetricAggregationEnabled: true,
+		OTLPIndexLabelAttributes: []string{
+			"service.name",
+			"service.namespace",
+			"service.instance.id",
+			"deployment.environment",
+			"cloud.region",
+			"cloud.availability_zone",
+			"k8s.cluster.name",
+			"k8s.namespace.name",
+			"k8s.pod.name",
+			"k8s.container.name",
+			"container.name",
+			"k8s.replicaset.name",
+			"k8s.deployment.name",
+			"k8s.statefulset.name",
+			"k8s.daemonset.name",
+			"k8s.cronjob.name",
+			"k8s.job.name",
+			"app_id",
+			"app_key",
+			"kind",
+			"deployment.environment.name",
+		},
+		PatternPersistenceEnabled: false,
+		QueryTimeout:              "5m",
+		RetentionPeriod:           "31d",
+		VolumeEnabled:             true,
+		VolumeMaxSeries:           100000000,
+		PatternIngesterEnabled:    true,
+		Version:                   "fake",
+	}
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -405,6 +522,7 @@ func convert(r *rawConfig) (*Config, error) {
 			MetadataCacheTTL:        dur(r.Labels.MetadataCacheTTL, "labels.metadataCacheTTL"),
 			MetadataCacheSize:       r.Labels.MetadataCacheSize,
 		},
+		Drilldown: r.Drilldown,
 		Log: LogConfig{
 			Level:  r.Log.Level,
 			Format: r.Log.Format,
