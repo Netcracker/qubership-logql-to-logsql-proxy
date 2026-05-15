@@ -4,17 +4,17 @@ The main purpose of this proxy is to provide the ability to use **Grafana Logs D
 
 We did not aim to fully cover LogQL syntax or translate all of it to LogsQL.
 
-* [LogQL (Grafana Loki) to LogsQL (VictoriaLogs)](#logql-grafana-loki-to-logsql-victorialogs)
-  * [Supported LogQL](#supported-logql)
-    * [Stream selectors](#stream-selectors)
-    * [Pipeline stages](#pipeline-stages)
-    * [Metric wrappers (range vectors)](#metric-wrappers-range-vectors)
-    * [Vector aggregations (used by Grafana Drilldown)](#vector-aggregations-used-by-grafana-drilldown)
-  * [Supported endpoints](#supported-endpoints)
-  * [High-level architecture](#high-level-architecture)
-  * [TODO](#todo)
-    * [Improvements](#improvements)
-    * [Known issues](#known-issues)
+- [LogQL (Grafana Loki) to LogsQL (VictoriaLogs)](#logql-grafana-loki-to-logsql-victorialogs)
+  - [Supported LogQL](#supported-logql)
+    - [Stream selectors](#stream-selectors)
+    - [Pipeline stages](#pipeline-stages)
+    - [Metric wrappers (range vectors)](#metric-wrappers-range-vectors)
+    - [Vector aggregations (used by Grafana Drilldown)](#vector-aggregations-used-by-grafana-drilldown)
+  - [Supported endpoints](#supported-endpoints)
+  - [High-level architecture](#high-level-architecture)
+  - [TODO](#todo)
+    - [Improvements](#improvements)
+    - [Known issues](#known-issues)
 
 ## Supported LogQL
 
@@ -110,23 +110,17 @@ flowchart TD
 
 ### Improvements
 
-* [ ] Add `detected_level` label to all logs to support colors on histograms
-* [ ] Add allow and deny lists for labels and fields
-* [ ] Add metrics
-* [ ] Improve logs to show original errors
-* [ ] Measure performance and resource usage
-* [ ] Check the logql-to-logsql translator
-      [https://github.com/VictoriaMetrics-community/logql-to-logsql/](https://github.com/VictoriaMetrics-community/logql-to-logsql/)
-      and maybe reuse it
+- [ ] Add `detected_level` label to all logs to support colors on histograms
+- [ ] Add allow and deny lists for labels and fields
+- [ ] Add metrics
+- [ ] Improve logs to show original errors
+- [ ] Measure performance and resource usage
+- [ ] Check the logql-to-logsql translator:
+  [https://github.com/VictoriaMetrics-community/logql-to-logsql/](https://github.com/VictoriaMetrics-community/logql-to-logsql/)
+  and maybe reuse it
 
 ### Known issues
 
 `Explorer`:
 
-* [ ] Some Explore-generated LogQL constructs may still be unsupported or unverified
-
-`Logs Drilldown` / `Logs Details`:
-
-* [ ] `Log Volume` shows incorrect data
-* [ ] There are no level colors in histograms
-* [ ] In `Fields`, `Show panels with errors` doesn't work
+- [ ] Some Explore-generated LogQL constructs may still be unsupported or unverified
