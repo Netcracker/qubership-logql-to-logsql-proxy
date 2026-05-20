@@ -78,6 +78,14 @@ func TestTranslateLineFilter(t *testing.T) {
 	}
 }
 
+func TestTranslateEmptyLineFilterIsNoop(t *testing.T) {
+	r := parseAndTranslate(t, "{app=`api`} |= ``")
+	want := `app:="api"`
+	if r.LogsQL != want {
+		t.Errorf("got %q, want %q", r.LogsQL, want)
+	}
+}
+
 // TestTranslateNotLineFilter covers pipeline `!= "text"` (not-contains) and
 // `!~ "re"` (not-regex).
 func TestTranslateNotLineFilter(t *testing.T) {

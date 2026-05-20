@@ -123,6 +123,35 @@ func TestQueryInstantUsesOneSecondWindow(t *testing.T) {
 	}
 }
 
+func TestQueryRangeEmptyContainsFilterIsNoop(t *testing.T) {
+	var got vlogs.LogQueryRequest
+	deps := testDeps(&stubVL{
+		queryLogsFn: func(_ context.Context, req vlogs.LogQueryRequest, fn func(vlogs.Record) error) error {
+			got = req
+			return fn(vlogs.Record{
+				"_time":     "2024-01-15T12:00:00Z",
+				"_msg":      "log line",
+				"container": "kindnet-cni",
+			})
+		},
+	})
+
+	ctx := newCtx("/loki/api/v1/query_range?query=%7Bcontainer%3D%22kindnet-cni%22%7D+%7C%3D+%60%60&start=1705320000&end=1705323600")
+	deps.QueryRange(ctx)
+
+	if ctx.Response.StatusCode() != fasthttp.StatusOK {
+		t.Fatalf("status = %d, want 200 body=%s", ctx.Response.StatusCode(), ctx.Response.Body())
+	}
+	if got.Query != `container:="kindnet-cni"` {
+		t.Fatalf("translated query = %q, want %q", got.Query, `container:="kindnet-cni"`)
+	}
+
+	body := decodeBody[loki.StreamsResponse](t, ctx)
+	if len(body.Data.Result) != 1 {
+		t.Fatalf("stream count = %d, want 1", len(body.Data.Result))
+	}
+}
+
 func TestLabelsUsesParsedTimeRangeAndCachesSuccess(t *testing.T) {
 	start := time.Unix(1705320000, 0).UTC()
 	end := time.Unix(1705323600, 0).UTC()

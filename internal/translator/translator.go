@@ -161,7 +161,9 @@ func translateLogQuery(lq *parser.LogQuery, opts Options) (logsql string, hasJSO
 	for _, stage := range lq.Pipeline {
 		switch s := stage.(type) {
 		case *parser.LineFilter:
-			terms = append(terms, translateLineFilter(s))
+			if term := translateLineFilter(s); term != "" {
+				terms = append(terms, term)
+			}
 		case *parser.LabelFilter:
 			t, terr := translateLabelFilter(s, opts)
 			if terr != nil {
@@ -242,6 +244,12 @@ func translateLabelFilter(f *parser.LabelFilter, opts Options) (string, error) {
 func translateLineFilter(f *parser.LineFilter) string {
 	switch f.Op {
 	case parser.Contains:
+		// In LogQL an empty contains filter (`|= ""` or `|= ```) matches every
+		// line, so it must behave as a no-op. Emitting `_msg:""` would
+		// over-constrain the VictoriaLogs query and can hide valid records.
+		if f.Value == "" {
+			return ""
+		}
 		// LogsQL uses _msg:"text" for substring/word search (no := needed)
 		return fmt.Sprintf(`_msg:"%s"`, escapeLit(f.Value))
 	case parser.NotContains:
