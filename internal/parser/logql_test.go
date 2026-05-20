@@ -186,6 +186,16 @@ func TestParseRate(t *testing.T) {
 	}
 }
 
+func TestParseRateCounter(t *testing.T) {
+	mq := asMetricQuery(t, mustParse(t, `rate_counter({app="api"}[1h])`))
+	if mq.Function != parser.Rate {
+		t.Errorf("expected Rate, got %d", mq.Function)
+	}
+	if mq.Range != time.Hour {
+		t.Errorf("expected 1h range, got %v", mq.Range)
+	}
+}
+
 func TestParseBacktickStringLabel(t *testing.T) {
 	// Grafana Logs Drilldown sends backtick-quoted strings, e.g.
 	// {service_name=~`.+`}

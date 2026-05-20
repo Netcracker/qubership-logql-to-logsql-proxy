@@ -569,6 +569,32 @@ func TestHandleMetricQueryAndParseRecordTime(t *testing.T) {
 	}
 }
 
+func TestQueryRangeRateCounter(t *testing.T) {
+	var got vlogs.HitsQueryRequest
+	deps := testDeps(&stubVL{
+		queryHitsFn: func(_ context.Context, req vlogs.HitsQueryRequest) ([]vlogs.HitBucket, error) {
+			got = req
+			return []vlogs.HitBucket{{Timestamp: time.Unix(1705320000, 0).UTC(), Count: 1}}, nil
+		},
+	})
+	deps.Cfg.Labels.LabelRemap = nil
+
+	ctx := newCtx(`/loki/api/v1/query_range?query=rate_counter({detected_level="error"}%20|=%20%60Reconciliation%60%20[2s])&start=1705320000&end=1705323600&step=60`)
+	deps.QueryRange(ctx)
+
+	if ctx.Response.StatusCode() != fasthttp.StatusOK {
+		t.Fatalf("status = %d, want 200 body=%s", ctx.Response.StatusCode(), ctx.Response.Body())
+	}
+	if got.Query != `detected_level:="error" AND _msg:"Reconciliation"` {
+		t.Fatalf("translated query = %q", got.Query)
+	}
+
+	body := decodeBody[loki.MatrixResponse](t, ctx)
+	if body.Data.ResultType != "matrix" || len(body.Data.Result) != 1 {
+		t.Fatalf("unexpected matrix response: %+v", body.Data)
+	}
+}
+
 func TestPatternsCapsLimitAndTimesOut(t *testing.T) {
 	var got vlogs.LogQueryRequest
 	deps := testDeps(&stubVL{

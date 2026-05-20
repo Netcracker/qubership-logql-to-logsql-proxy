@@ -332,7 +332,7 @@ func (p *parser) parseQuery() (Query, error) {
 	}
 	return nil, &ParseError{
 		Pos: tok.pos,
-		Msg: fmt.Sprintf("expected { or metric function (count_over_time, rate), got %q", tok.val),
+		Msg: fmt.Sprintf("expected { or metric function (count_over_time, rate, rate_counter), got %q", tok.val),
 	}
 }
 
@@ -348,6 +348,8 @@ func (p *parser) parseMetricQuery() (*MetricQuery, error) {
 	case "count_over_time":
 		fn = CountOverTime
 	case "rate":
+		fn = Rate
+	case "rate_counter":
 		fn = Rate
 	default:
 		return nil, &UnsupportedError{Pos: funcTok.pos, Construct: funcTok.val}
@@ -373,6 +375,7 @@ func (p *parser) parseMetricQuery() (*MetricQuery, error) {
 			Msg: fmt.Sprintf("expected duration (e.g. 5m), got %q", durTok.val),
 		}
 	}
+
 	dur, err := time.ParseDuration(durTok.val)
 	if err != nil {
 		return nil, &ParseError{
@@ -757,7 +760,7 @@ func isAggFunc(name string) bool {
 }
 
 func isMetricFunc(name string) bool {
-	return name == "count_over_time" || name == "rate"
+	return name == "count_over_time" || name == "rate" || name == "rate_counter"
 }
 
 func tokenName(tt tokenType) string {
