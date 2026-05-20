@@ -643,6 +643,32 @@ func TestLabelValuesSuccess(t *testing.T) {
 	}
 }
 
+func TestDetectedFieldValuesSuccess(t *testing.T) {
+	vl := &mockVL{fieldValues: []string{"error", "warn"}}
+	deps := newDeps(vl)
+	deps.Cfg.Labels.LabelRemap = map[string]string{"detected_level": "level"}
+	addr, cleanup := newTestServer(t, buildHandler(deps))
+	defer cleanup()
+
+	resp, err := http.Get(addr + "/loki/api/v1/detected_field/detected_level/values?start=1705320000&end=1705323600&query=%7Bservice_name%3D%22etcd%22%7D")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer closeRespBody(t, resp)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	var body loki.LabelValuesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Data) != 2 {
+		t.Errorf("expected 2 values, got %d: %v", len(body.Data), body.Data)
+	}
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // /loki/api/v1/series
 // ────────────────────────────────────────────────────────────────────────────

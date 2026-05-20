@@ -440,6 +440,43 @@ func TestLabelValuesErrorIsNotCached(t *testing.T) {
 	}
 }
 
+func TestDetectedFieldValuesUsesRemapAndScopedQuery(t *testing.T) {
+	start := time.Unix(1705320000, 0).UTC()
+	end := time.Unix(1705323600, 0).UTC()
+
+	var got vlogs.FieldValuesRequest
+	deps := testDeps(&stubVL{
+		fieldValuesFn: func(_ context.Context, req vlogs.FieldValuesRequest) ([]string, error) {
+			got = req
+			return []string{"error", "warn"}, nil
+		},
+	})
+	deps.Cfg.Labels.LabelRemap = map[string]string{"detected_level": "level"}
+	deps.Cfg.Labels.ServiceNameFallbackFields = []string{"service_name", "app", "container"}
+
+	ctx := newCtx(`/loki/api/v1/detected_field/detected_level/values?start=1705320000&end=1705323600&limit=1000&query={service_name="vmalert"} | json | logfmt | drop __error__, __error_details__`)
+	ctx.SetUserValue("name", "detected_level")
+	deps.DetectedFieldValues(ctx)
+
+	if ctx.Response.StatusCode() != fasthttp.StatusOK {
+		t.Fatalf("status = %d, want 200 body=%s", ctx.Response.StatusCode(), ctx.Response.Body())
+	}
+	if got.FieldName != "level" {
+		t.Fatalf("FieldName = %q, want level", got.FieldName)
+	}
+	if got.Query == "*" {
+		t.Fatalf("Query = %q, want scoped filter", got.Query)
+	}
+	if !got.Start.Equal(start) || !got.End.Equal(end) {
+		t.Errorf("range = [%v, %v], want [%v, %v]", got.Start, got.End, start, end)
+	}
+
+	body := decodeBody[loki.LabelValuesResponse](t, ctx)
+	if len(body.Data) != 2 || body.Data[0] != "error" {
+		t.Errorf("unexpected body: %+v", body.Data)
+	}
+}
+
 func TestLabelValuesAndSeriesHelpers(t *testing.T) {
 	deps := testDeps(&stubVL{})
 
