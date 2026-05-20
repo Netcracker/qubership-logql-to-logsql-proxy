@@ -102,6 +102,38 @@ func TestTranslateSyntheticServiceNameNotEmptyMatcher(t *testing.T) {
 	}
 }
 
+func TestTranslateInternalStreamSelector(t *testing.T) {
+	r := parseAndTranslate(t, `{_stream="{container=\"cloud-provider-kind\",namespace=\"kube-system\"}"}`)
+	want := `{container="cloud-provider-kind",namespace="kube-system"}`
+	if r.LogsQL != want {
+		t.Errorf("got %q, want %q", r.LogsQL, want)
+	}
+}
+
+func TestTranslateInternalStreamSelectorNotEmptyIsDropped(t *testing.T) {
+	r := parseAndTranslate(t, `{level="info", _stream!=""}`)
+	want := `level:="info"`
+	if r.LogsQL != want {
+		t.Errorf("got %q, want %q", r.LogsQL, want)
+	}
+}
+
+func TestTranslateInternalStreamIDSelectorNotEmptyIsDropped(t *testing.T) {
+	r := parseAndTranslate(t, `{level="info", _stream_id!=""}`)
+	want := `level:="info"`
+	if r.LogsQL != want {
+		t.Errorf("got %q, want %q", r.LogsQL, want)
+	}
+}
+
+func TestTranslateInternalTimeSelectorNotEmptyIsDropped(t *testing.T) {
+	r := parseAndTranslate(t, `{level="err", _time!=""}`)
+	want := `level:="err"`
+	if r.LogsQL != want {
+		t.Errorf("got %q, want %q", r.LogsQL, want)
+	}
+}
+
 func TestTranslateLineFilter(t *testing.T) {
 	r := parseAndTranslate(t, `{app="api"} |= "error"`)
 	want := `app:="api" AND _msg:"error"`

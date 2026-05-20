@@ -30,6 +30,30 @@ func TestTranslationErrorAndLabelFilterHelpers(t *testing.T) {
 		t.Errorf("translateLabelFilter(remap) = %q", filter)
 	}
 
+	stream, streamErr := translateMatcher(parser.LabelMatcher{
+		Name:  "_stream",
+		Type:  parser.Eq,
+		Value: `{container="cloud-provider-kind",namespace="kube-system"}`,
+	}, Options{})
+	if streamErr != nil {
+		t.Fatalf("translateMatcher(_stream): %v", streamErr)
+	}
+	if stream != `{container="cloud-provider-kind",namespace="kube-system"}` {
+		t.Errorf("translateMatcher(_stream) = %q", stream)
+	}
+
+	timeFilter, timeErr := translateMatcher(parser.LabelMatcher{
+		Name:  "_time",
+		Type:  parser.Neq,
+		Value: "",
+	}, Options{})
+	if timeErr != nil {
+		t.Fatalf("translateMatcher(_time): %v", timeErr)
+	}
+	if timeFilter != "" {
+		t.Errorf("translateMatcher(_time) = %q, want empty", timeFilter)
+	}
+
 	if got := remapNames([]string{"detected_level", "app"}, map[string]string{"detected_level": "level"}); len(got) != 2 || got[0] != "level" || got[1] != "app" {
 		t.Errorf("remapNames() = %v", got)
 	}

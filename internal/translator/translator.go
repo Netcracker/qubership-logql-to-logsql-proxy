@@ -180,7 +180,9 @@ func translateLogQuery(lq *parser.LogQuery, opts Options) (logsql string, hasJSO
 		if terr != nil {
 			return "", false, terr
 		}
-		terms = append(terms, t)
+		if t != "" {
+			terms = append(terms, t)
+		}
 	}
 
 	for _, stage := range lq.Pipeline {
@@ -222,6 +224,9 @@ func translateMatcher(m parser.LabelMatcher, opts Options) (string, error) {
 	name := remapName(m.Name, opts.LabelRemap)
 	if name == "service_name" {
 		return translateSyntheticServiceNameMatcher(m, opts.ServiceNameFallbackFields)
+	}
+	if vlInternalFields[name] {
+		return translateInternalMatcher(name, m)
 	}
 	f := quoteLabelName(name)
 	switch m.Type {
@@ -277,6 +282,58 @@ func translateSyntheticServiceNameMatcher(m parser.LabelMatcher, fields []string
 	return "(" + strings.Join(parts, joiner) + ")", nil
 }
 
+func translateInternalMatcher(name string, m parser.LabelMatcher) (string, error) {
+	switch name {
+	case "_stream":
+		return translateStreamSelectorMatcher(m)
+	case "_stream_id":
+		return translateStreamIDSelectorMatcher(m)
+	case "_time":
+		return translateTimeSelectorMatcher(m)
+	default:
+		return "", &TranslationError{Msg: fmt.Sprintf("unsupported internal field %q", name)}
+	}
+}
+
+func translateStreamSelectorMatcher(m parser.LabelMatcher) (string, error) {
+	if m.Type != parser.Eq && m.Type != parser.Neq {
+		return "", &TranslationError{Msg: "_stream supports only = and !="}
+	}
+	// Grafana Drilldown frequently appends `_stream != ""` to exclude empty
+	// values. For VictoriaLogs this is effectively a no-op and must be dropped.
+	if m.Type == parser.Neq && m.Value == "" {
+		return "", nil
+	}
+	if !strings.HasPrefix(m.Value, "{") || !strings.HasSuffix(m.Value, "}") {
+		return "", &TranslationError{Msg: `_stream value must be a VictoriaLogs stream selector like {label="value"}`}
+	}
+	if m.Type == parser.Neq {
+		return "NOT " + m.Value, nil
+	}
+	return m.Value, nil
+}
+
+func translateStreamIDSelectorMatcher(m parser.LabelMatcher) (string, error) {
+	if m.Type != parser.Eq && m.Type != parser.Neq {
+		return "", &TranslationError{Msg: "_stream_id supports only = and !="}
+	}
+	if m.Type == parser.Neq && m.Value == "" {
+		return "", nil
+	}
+	return "", &TranslationError{Msg: "_stream_id stream selector is not supported"}
+}
+
+func translateTimeSelectorMatcher(m parser.LabelMatcher) (string, error) {
+	if m.Type != parser.Eq && m.Type != parser.Neq {
+		return "", &TranslationError{Msg: "_time supports only = and !="}
+	}
+	// Request start/end already constrain time, so `_time != ""` adds no value.
+	if m.Type == parser.Neq && m.Value == "" {
+		return "", nil
+	}
+	return "", &TranslationError{Msg: "_time stream selector is not supported"}
+}
+
 // vlInternalFields lists VictoriaLogs field names that use non-standard filter
 // syntax and therefore cannot be expressed with the :=/:~ operators. Label
 // filter stages that target these fields are silently dropped.
@@ -287,6 +344,7 @@ func translateSyntheticServiceNameMatcher(m parser.LabelMatcher, fields []string
 var vlInternalFields = map[string]bool{
 	"_stream":    true,
 	"_stream_id": true,
+	"_time":      true,
 }
 
 func translateLabelFilter(f *parser.LabelFilter, opts Options) (string, error) {
