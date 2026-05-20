@@ -78,12 +78,20 @@ type LabelsConfig struct {
 	KnownLabels []string
 
 	// LabelRemap translates LogQL label names to their VictoriaLogs equivalents
-	// before emitting LogsQL. The default mapping is:
+	// before emitting LogsQL.
+	//
+	// No remapping is enabled by default. This keeps environments that already
+	// store Grafana-compatible labels (for example, a real "detected_level"
+	// field) working without translation surprises.
+	//
+	// For compatibility with older pipelines that only store "level", you can
+	// explicitly enable:
 	//   detected_level → level
-	// (Grafana Logs Drilldown synthesises "detected_level" from log content;
-	// VictoriaLogs stores the equivalent information in the "level" field.)
-	// Override in config to add or replace entries; set to {} to disable all
-	// remapping.
+	//
+	// Example YAML:
+	//   labels:
+	//     labelRemap:
+	//       detected_level: level
 	LabelRemap map[string]string
 
 	MetadataCacheTTL  time.Duration // default: 5m
@@ -178,9 +186,6 @@ func defaultRaw() *rawConfig {
 	r.Limits.MaxQueryRangeHours = 24
 	r.Limits.MaxLimit = 5000
 	r.Limits.DefaultLimit = 1000
-	r.Labels.LabelRemap = map[string]string{
-		"detected_level": "level",
-	}
 	r.Labels.MetadataCacheTTL = "5m"
 	r.Labels.MetadataCacheSize = 256
 	r.Log.Level = "info"

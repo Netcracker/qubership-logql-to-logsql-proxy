@@ -75,6 +75,9 @@ func TestLoadAppliesDefaultsFileEnvAndPasswordFile(t *testing.T) {
 	if got := cfg.Labels.KnownLabels; len(got) != 3 || got[0] != "app" || got[1] != "team" || got[2] != "env" {
 		t.Errorf("KnownLabels = %v, want [app team env]", got)
 	}
+	if len(cfg.Labels.LabelRemap) != 0 {
+		t.Errorf("LabelRemap = %v, want empty by default", cfg.Labels.LabelRemap)
+	}
 	if cfg.Log.Level != "debug" {
 		t.Errorf("Log.Level = %q, want %q", cfg.Log.Level, "debug")
 	}
@@ -83,6 +86,36 @@ func TestLoadAppliesDefaultsFileEnvAndPasswordFile(t *testing.T) {
 	}
 	if cfg.Limits.MaxStreamsPerResponse != 5000 {
 		t.Errorf("MaxStreamsPerResponse = %d, want default 5000", cfg.Limits.MaxStreamsPerResponse)
+	}
+}
+
+func TestLoadAllowsExplicitLabelRemapFromConfig(t *testing.T) {
+	cfgFile, err := os.CreateTemp(t.TempDir(), "config-*.yaml")
+	if err != nil {
+		t.Fatalf("CreateTemp(config): %v", err)
+	}
+	cfgYAML := strings.Join([]string{
+		"vlogs:",
+		"  url: http://victorialogs:9428",
+		"labels:",
+		"  labelRemap:",
+		"    detected_level: level",
+		"",
+	}, "\n")
+	if _, err := cfgFile.WriteString(cfgYAML); err != nil {
+		t.Fatalf("WriteString(config): %v", err)
+	}
+	if err := cfgFile.Close(); err != nil {
+		t.Fatalf("Close(config): %v", err)
+	}
+
+	cfg, err := Load(cfgFile.Name())
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+
+	if got := cfg.Labels.LabelRemap["detected_level"]; got != "level" {
+		t.Fatalf("LabelRemap[detected_level] = %q, want %q", got, "level")
 	}
 }
 
