@@ -52,11 +52,16 @@ func (d *Deps) handleQuery(ctx *fasthttp.RequestCtx, instant bool) {
 	// Loki datasource connection. It is not valid LogQL; return a minimal
 	// success response so the datasource health check passes.
 	if isVectorExpr(queryStr) {
-		writeJSON(ctx, fasthttp.StatusOK, loki.MatrixResponse{
+		writeJSON(ctx, fasthttp.StatusOK, loki.VectorResponse{
 			Status: "success",
-			Data: loki.MatrixData{
+			Data: loki.VectorData{
 				ResultType: "vector",
-				Result:     []loki.MatrixSeries{},
+				Result: []loki.VectorSample{
+					{
+						Metric: map[string]string{},
+						Value:  []interface{}{float64(time.Now().Unix()), "2"},
+					},
+				},
 			},
 		})
 		return

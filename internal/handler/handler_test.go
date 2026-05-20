@@ -220,6 +220,41 @@ func TestQueryRangeBadLogQL(t *testing.T) {
 	}
 }
 
+func TestQueryHealthCheckVectorExprReturnsSingleSample(t *testing.T) {
+	addr, cleanup := newTestServer(t, buildHandler(newDeps(&mockVL{})))
+	defer cleanup()
+
+	resp, err := http.Get(addr + "/loki/api/v1/query?query=vector(1)%2Bvector(1)&time=4000000000")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer closeRespBody(t, resp)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	var body loki.VectorResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Status != "success" {
+		t.Fatalf("status = %q, want success", body.Status)
+	}
+	if body.Data.ResultType != "vector" {
+		t.Fatalf("resultType = %q, want vector", body.Data.ResultType)
+	}
+	if len(body.Data.Result) != 1 {
+		t.Fatalf("result len = %d, want 1", len(body.Data.Result))
+	}
+	if len(body.Data.Result[0].Value) != 2 {
+		t.Fatalf("value len = %d, want 2", len(body.Data.Result[0].Value))
+	}
+	if got, ok := body.Data.Result[0].Value[1].(string); !ok || got != "2" {
+		t.Fatalf("sample value = %#v, want string %q", body.Data.Result[0].Value[1], "2")
+	}
+}
+
 func TestQueryRangeUnsupportedConstruct(t *testing.T) {
 	addr, cleanup := newTestServer(t, buildHandler(newDeps(&mockVL{})))
 	defer cleanup()
