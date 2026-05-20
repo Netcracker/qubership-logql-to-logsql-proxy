@@ -142,6 +142,34 @@ func TestTranslateLineFilter(t *testing.T) {
 	}
 }
 
+func TestTranslatePatternFilter(t *testing.T) {
+	r := parseAndTranslate(t, `{level="warning"} |> "Reconciliation started"`)
+	for _, want := range []string{
+		`level:="warning"`,
+		`_msg:~"Reconciliation`,
+		`[[:space:]]+`,
+		`started"`,
+	} {
+		if !strings.Contains(r.LogsQL, want) {
+			t.Errorf("LogsQL %q does not contain %q", r.LogsQL, want)
+		}
+	}
+}
+
+func TestTranslateNotPatternFilter(t *testing.T) {
+	r := parseAndTranslate(t, `{level="warning"} !> "Reconciliation started"`)
+	for _, want := range []string{
+		`level:="warning"`,
+		`NOT _msg:~"Reconciliation`,
+		`[[:space:]]+`,
+		`started"`,
+	} {
+		if !strings.Contains(r.LogsQL, want) {
+			t.Errorf("LogsQL %q does not contain %q", r.LogsQL, want)
+		}
+	}
+}
+
 func TestTranslateEmptyLineFilterIsNoop(t *testing.T) {
 	r := parseAndTranslate(t, "{app=`api`} |= ``")
 	want := `app:="api"`

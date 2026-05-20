@@ -27,6 +27,7 @@ package translator
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -384,10 +385,60 @@ func translateLineFilter(f *parser.LineFilter) string {
 		return fmt.Sprintf(`_msg:~"%s"`, escapeRe(f.Value))
 	case parser.NotRegex:
 		return fmt.Sprintf(`NOT _msg:~"%s"`, escapeRe(f.Value))
+	case parser.Pattern:
+		return fmt.Sprintf(`_msg:~"%s"`, escapeRe(logQLPatternToRegex(f.Value)))
+	case parser.NotPattern:
+		return fmt.Sprintf(`NOT _msg:~"%s"`, escapeRe(logQLPatternToRegex(f.Value)))
 	default:
 		// Defensive fallback; the parser never produces an unknown FilterOp.
 		return fmt.Sprintf(`_msg:"%s"`, escapeLit(f.Value))
 	}
+}
+
+var patternPlaceholders = map[string]string{
+	"<_>":        ".*",
+	"<N>":        "[0-9]+",
+	"<IP4>":      "(?:[0-9]{1,3}\\.){3}[0-9]{1,3}",
+	"<UUID>":     "[0-9a-fA-F-]{36}",
+	"<DATE>":     "[0-9]{4}-[0-9]{2}-[0-9]{2}",
+	"<TIME>":     "[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]+)?",
+	"<DATETIME>": "[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9:+\\-.Z]+",
+}
+
+func logQLPatternToRegex(pattern string) string {
+	var sb strings.Builder
+	for i := 0; i < len(pattern); {
+		if pattern[i] == ' ' || pattern[i] == '\t' || pattern[i] == '\n' || pattern[i] == '\r' {
+			for i < len(pattern) {
+				switch pattern[i] {
+				case ' ', '\t', '\n', '\r':
+					i++
+				default:
+					sb.WriteString(`[[:space:]]+`)
+					goto next
+				}
+			}
+			sb.WriteString(`[[:space:]]+`)
+			break
+		}
+		if pattern[i] == '<' {
+			if j := strings.IndexByte(pattern[i:], '>'); j >= 0 {
+				token := pattern[i : i+j+1]
+				if repl, ok := patternPlaceholders[token]; ok {
+					sb.WriteString(repl)
+					i += j + 1
+					continue
+				}
+				sb.WriteString(".*")
+				i += j + 1
+				continue
+			}
+		}
+		sb.WriteString(regexp.QuoteMeta(pattern[i : i+1]))
+		i++
+	next:
+	}
+	return sb.String()
 }
 
 // ────────────────────────────────────────────────────────────────────────────

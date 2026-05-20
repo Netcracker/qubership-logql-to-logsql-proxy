@@ -132,6 +132,28 @@ func TestParseWithRegexFilter(t *testing.T) {
 	}
 }
 
+func TestParseWithPatternFilter(t *testing.T) {
+	lq := asLogQuery(t, mustParse(t, `{level="warning"} |> "Reconciliation started"`))
+	lf, ok := lq.Pipeline[0].(*parser.LineFilter)
+	if !ok {
+		t.Fatalf("expected *LineFilter, got %T", lq.Pipeline[0])
+	}
+	if lf.Op != parser.Pattern || lf.Value != "Reconciliation started" {
+		t.Errorf("got LineFilter %+v, want {Op:Pattern Value:Reconciliation started}", lf)
+	}
+}
+
+func TestParseWithNotPatternFilter(t *testing.T) {
+	lq := asLogQuery(t, mustParse(t, `{level="warning"} !> "Reconciliation started"`))
+	lf, ok := lq.Pipeline[0].(*parser.LineFilter)
+	if !ok {
+		t.Fatalf("expected *LineFilter, got %T", lq.Pipeline[0])
+	}
+	if lf.Op != parser.NotPattern || lf.Value != "Reconciliation started" {
+		t.Errorf("got LineFilter %+v, want {Op:NotPattern Value:Reconciliation started}", lf)
+	}
+}
+
 func TestParseWithNotRegexFilter(t *testing.T) {
 	lq := asLogQuery(t, mustParse(t, `{app="api"} !~ "err.*"`))
 	lf, ok := lq.Pipeline[0].(*parser.LineFilter)

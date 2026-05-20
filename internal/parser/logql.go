@@ -30,6 +30,8 @@ const (
 	tokNRE                // !~
 	tokPIPE_EQ            // |=  (line-filter contains)
 	tokPIPE_RE            // |~  (line-filter regex)
+	tokPIPE_PATTERN       // |>  (pattern filter)
+	tokNPIPE_PATTERN      // !>  (negated pattern filter)
 	tokPIPE               // |
 	tokDURATION           // e.g. 5m, 1h30m
 )
@@ -110,6 +112,9 @@ func (l *lexer) next() token {
 		case '~':
 			l.pos += 2
 			return token{tokNRE, "!~", pos}
+		case '>':
+			l.pos += 2
+			return token{tokNPIPE_PATTERN, "!>", pos}
 		}
 		l.pos++
 		return token{tokILLEGAL, "!", pos}
@@ -122,6 +127,9 @@ func (l *lexer) next() token {
 		case '~':
 			l.pos += 2
 			return token{tokPIPE_RE, "|~", pos}
+		case '>':
+			l.pos += 2
+			return token{tokPIPE_PATTERN, "|>", pos}
 		}
 		l.pos++
 		return token{tokPIPE, "|", pos}
@@ -507,6 +515,8 @@ func (p *parser) parseLabelMatcher() (LabelMatcher, error) {
 //	               | "!=" STRING       (not-contains)
 //	               | "|~" STRING       (regex)
 //	               | "!~" STRING       (not-regex)
+//	               | "|>" STRING       (pattern match)
+//	               | "!>" STRING       (negated pattern match)
 //	               | "|" "json"
 //	               | "|" IDENT         (unsupported → UnsupportedError)
 //
@@ -537,6 +547,22 @@ func (p *parser) parsePipeline() ([]PipelineStage, error) {
 				return nil, err
 			}
 			stages = append(stages, &LineFilter{Op: Regex, Value: v})
+
+		case tokPIPE_PATTERN:
+			p.consume()
+			v, err := p.expectString(tok)
+			if err != nil {
+				return nil, err
+			}
+			stages = append(stages, &LineFilter{Op: Pattern, Value: v})
+
+		case tokNPIPE_PATTERN:
+			p.consume()
+			v, err := p.expectString(tok)
+			if err != nil {
+				return nil, err
+			}
+			stages = append(stages, &LineFilter{Op: NotPattern, Value: v})
 
 		case tokNEQ:
 			p.consume()
@@ -616,7 +642,7 @@ func (p *parser) parsePipeline() ([]PipelineStage, error) {
 		default:
 			return nil, &ParseError{
 				Pos: tok.pos,
-				Msg: fmt.Sprintf("unexpected token %q in pipeline (expected |=, !=, |~, !~, | json/logfmt/drop/keep, or end of query)", tok.val),
+				Msg: fmt.Sprintf("unexpected token %q in pipeline (expected |=, !=, |~, !~, |>, !>, | json/logfmt/drop/keep, or end of query)", tok.val),
 			}
 		}
 	}

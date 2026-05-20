@@ -689,6 +689,54 @@ func TestQueryRangeRateCounter(t *testing.T) {
 	}
 }
 
+func TestQueryRangePatternIncludeFilter(t *testing.T) {
+	var got vlogs.LogQueryRequest
+	deps := testDeps(&stubVL{
+		queryLogsFn: func(_ context.Context, req vlogs.LogQueryRequest, fn func(vlogs.Record) error) error {
+			got = req
+			return fn(vlogs.Record{
+				"_time":     "2024-01-15T12:00:00Z",
+				"_msg":      "Reconciliation started",
+				"container": "qubership-log-generator",
+			})
+		},
+	})
+
+	ctx := newCtx(`/loki/api/v1/query_range?query={service_name="qubership-log-generator"}%20|>%20"Reconciliation%20started"&start=1705320000&end=1705323600`)
+	deps.QueryRange(ctx)
+
+	if ctx.Response.StatusCode() != fasthttp.StatusOK {
+		t.Fatalf("status = %d, want 200 body=%s", ctx.Response.StatusCode(), ctx.Response.Body())
+	}
+	if !strings.Contains(got.Query, `_msg:~"Reconciliation[[:space:]]+started"`) {
+		t.Fatalf("translated query = %q", got.Query)
+	}
+}
+
+func TestQueryRangePatternExcludeFilter(t *testing.T) {
+	var got vlogs.LogQueryRequest
+	deps := testDeps(&stubVL{
+		queryLogsFn: func(_ context.Context, req vlogs.LogQueryRequest, fn func(vlogs.Record) error) error {
+			got = req
+			return fn(vlogs.Record{
+				"_time":     "2024-01-15T12:00:00Z",
+				"_msg":      "Other log line",
+				"container": "qubership-log-generator",
+			})
+		},
+	})
+
+	ctx := newCtx(`/loki/api/v1/query_range?query={service_name="qubership-log-generator"}%20!>%20"Reconciliation%20started"&start=1705320000&end=1705323600`)
+	deps.QueryRange(ctx)
+
+	if ctx.Response.StatusCode() != fasthttp.StatusOK {
+		t.Fatalf("status = %d, want 200 body=%s", ctx.Response.StatusCode(), ctx.Response.Body())
+	}
+	if !strings.Contains(got.Query, `NOT _msg:~"Reconciliation[[:space:]]+started"`) {
+		t.Fatalf("translated query = %q", got.Query)
+	}
+}
+
 func TestPatternsCapsLimitAndTimesOut(t *testing.T) {
 	var got vlogs.LogQueryRequest
 	deps := testDeps(&stubVL{
