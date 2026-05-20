@@ -16,7 +16,7 @@ import (
 type StreamGrouper struct {
 	knownLabels []string
 	streams     map[string]*streamState
-	maxStreams   int
+	maxStreams  int
 	truncated   bool
 }
 
@@ -38,7 +38,7 @@ func NewStreamGrouper(knownLabels []string, maxStreams int) *StreamGrouper {
 	return &StreamGrouper{
 		knownLabels: knownLabels,
 		streams:     make(map[string]*streamState),
-		maxStreams:   maxStreams,
+		maxStreams:  maxStreams,
 	}
 }
 

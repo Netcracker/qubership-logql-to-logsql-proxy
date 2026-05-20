@@ -335,8 +335,8 @@ func TestTranslateUnsupportedReturnsError(t *testing.T) {
 			t.Errorf("Parse(%q): expected error, got nil", q)
 			continue
 		}
-		var ue *parser.UnsupportedError
-		if !errors.As(err, &ue) {
+		var unsupportedErr *parser.UnsupportedError
+		if !errors.As(err, &unsupportedErr) {
 			t.Errorf("Parse(%q): expected *UnsupportedError, got %T: %v", q, err, err)
 		}
 	}

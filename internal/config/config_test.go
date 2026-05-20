@@ -270,6 +270,18 @@ func TestApplyEnvCreatesBasicAuthLazily(t *testing.T) {
 	}
 }
 
+func TestApplyEnvSetsAggregationScanLimit(t *testing.T) {
+	raw := defaultRaw()
+
+	t.Setenv("PROXY_LIMITS_AGGREGATIONSCANLIMIT", "321")
+
+	applyEnv(raw)
+
+	if raw.Limits.AggregationScanLimit != 321 {
+		t.Fatalf("AggregationScanLimit = %d, want 321", raw.Limits.AggregationScanLimit)
+	}
+}
+
 func TestResolvePasswordFileNoopWithoutBasicAuth(t *testing.T) {
 	cfg := &Config{}
 	if err := resolvePasswordFile(cfg); err != nil {

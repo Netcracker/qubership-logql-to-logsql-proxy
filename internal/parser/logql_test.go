@@ -360,12 +360,12 @@ func TestParseUnsupportedConstruct(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for unsupported construct, got nil")
 	}
-	var ue *parser.UnsupportedError
-	if !errors.As(err, &ue) {
+	var unsupportedErr *parser.UnsupportedError
+	if !errors.As(err, &unsupportedErr) {
 		t.Errorf("expected *UnsupportedError, got %T: %v", err, err)
 	}
-	if ue.Construct != "| line_format" {
-		t.Errorf("expected construct %q, got %q", "| line_format", ue.Construct)
+	if unsupportedErr.Construct != "| line_format" {
+		t.Errorf("expected construct %q, got %q", "| line_format", unsupportedErr.Construct)
 	}
 }
 

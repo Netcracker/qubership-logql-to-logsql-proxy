@@ -13,27 +13,27 @@ import (
 type tokenType int
 
 const (
-	tokILLEGAL  tokenType = iota
-	tokEOF                // end of input
-	tokLBRACE             // {
-	tokRBRACE             // }
-	tokLPAREN             // (
-	tokRPAREN             // )
-	tokLBRACKET           // [
-	tokRBRACKET           // ]
-	tokCOMMA              // ,
-	tokIDENT              // identifier / keyword
-	tokSTRING             // "double-quoted string" (value is the unquoted content)
-	tokEQ                 // =
-	tokNEQ                // !=
-	tokRE                 // =~
-	tokNRE                // !~
-	tokPIPE_EQ            // |=  (line-filter contains)
-	tokPIPE_RE            // |~  (line-filter regex)
-	tokPIPE_PATTERN       // |>  (pattern filter)
-	tokNPIPE_PATTERN      // !>  (negated pattern filter)
-	tokPIPE               // |
-	tokDURATION           // e.g. 5m, 1h30m
+	tokILLEGAL       tokenType = iota
+	tokEOF                     // end of input
+	tokLBRACE                  // {
+	tokRBRACE                  // }
+	tokLPAREN                  // (
+	tokRPAREN                  // )
+	tokLBRACKET                // [
+	tokRBRACKET                // ]
+	tokCOMMA                   // ,
+	tokIDENT                   // identifier / keyword
+	tokSTRING                  // "double-quoted string" (value is the unquoted content)
+	tokEQ                      // =
+	tokNEQ                     // !=
+	tokRE                      // =~
+	tokNRE                     // !~
+	tokPIPE_EQ                 // |=  (line-filter contains)
+	tokPIPE_RE                 // |~  (line-filter regex)
+	tokPIPE_PATTERN            // |>  (pattern filter)
+	tokNPIPE_PATTERN           // !>  (negated pattern filter)
+	tokPIPE                    // |
+	tokDURATION                // e.g. 5m, 1h30m
 )
 
 type token struct {

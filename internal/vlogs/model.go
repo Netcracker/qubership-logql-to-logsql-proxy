@@ -81,9 +81,11 @@ type vlFieldEntry struct {
 // VictoriaLogs has used at least two wire formats across releases:
 //
 // Old:
+//
 //	{"hits":[{"timestamp":"2024-01-15T12:00:00Z","hits":42}, ...]}
 //
 // Newer:
+//
 //	{"hits":[{"fields":{},"timestamps":["2024-01-15T12:00:00Z"],"values":[42],"total":42}]}
 //
 // The client supports both shapes for compatibility.
