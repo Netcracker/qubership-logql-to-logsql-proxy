@@ -77,6 +77,12 @@ type LabelsConfig struct {
 	// KnownLabels is a static allowlist for /labels. Empty = query VL dynamically.
 	KnownLabels []string
 
+	// ServiceNameFallbackFields controls which VictoriaLogs fields are consulted
+	// when Grafana queries the synthetic "service_name" label. The first
+	// non-empty field becomes the synthetic service_name in grouped responses,
+	// and selector matchers on service_name are expanded across this list.
+	ServiceNameFallbackFields []string
+
 	// LabelRemap translates LogQL label names to their VictoriaLogs equivalents
 	// before emitting LogsQL.
 	//
@@ -153,10 +159,11 @@ type rawLimitsConfig struct {
 }
 
 type rawLabelsConfig struct {
-	KnownLabels       []string          `yaml:"knownLabels"`
-	LabelRemap        map[string]string `yaml:"labelRemap"`
-	MetadataCacheTTL  string            `yaml:"metadataCacheTTL"`
-	MetadataCacheSize int               `yaml:"metadataCacheSize"`
+	KnownLabels               []string          `yaml:"knownLabels"`
+	ServiceNameFallbackFields []string          `yaml:"serviceNameFallbackFields"`
+	LabelRemap                map[string]string `yaml:"labelRemap"`
+	MetadataCacheTTL          string            `yaml:"metadataCacheTTL"`
+	MetadataCacheSize         int               `yaml:"metadataCacheSize"`
 }
 
 type rawLogConfig struct {
@@ -186,6 +193,26 @@ func defaultRaw() *rawConfig {
 	r.Limits.MaxQueryRangeHours = 24
 	r.Limits.MaxLimit = 5000
 	r.Limits.DefaultLimit = 1000
+	r.Labels.ServiceNameFallbackFields = []string{
+		"service_name",
+		"service.name",
+		"service",
+		"labels.app.kubernetes.io/name",
+		"labels.k8s-app",
+		"labels.app",
+		"app",
+		"application",
+		"app_name",
+		"app_kubernetes_io_name",
+		"container",
+		"k8s.container.name",
+		"container.name",
+		"container_name",
+		"k8s_container_name",
+		"job",
+		"k8s.job.name",
+		"k8s_job_name",
+	}
 	r.Labels.MetadataCacheTTL = "5m"
 	r.Labels.MetadataCacheSize = 256
 	r.Log.Level = "info"
@@ -294,6 +321,16 @@ func applyEnv(r *rawConfig) {
 		}
 		r.Labels.KnownLabels = labels
 	}
+	if v := os.Getenv("PROXY_LABELS_SERVICENAMEFALLBACKFIELDS"); v != "" {
+		parts := strings.Split(v, ",")
+		fields := parts[:0]
+		for _, p := range parts {
+			if t := strings.TrimSpace(p); t != "" {
+				fields = append(fields, t)
+			}
+		}
+		r.Labels.ServiceNameFallbackFields = fields
+	}
 	envStr("PROXY_LABELS_METADATACACHETTL", &r.Labels.MetadataCacheTTL)
 	envInt("PROXY_LABELS_METADATACACHESIZE", &r.Labels.MetadataCacheSize)
 
@@ -348,10 +385,11 @@ func convert(r *rawConfig) (*Config, error) {
 			DefaultLimit:          r.Limits.DefaultLimit,
 		},
 		Labels: LabelsConfig{
-			KnownLabels:       r.Labels.KnownLabels,
-			LabelRemap:        r.Labels.LabelRemap,
-			MetadataCacheTTL:  dur(r.Labels.MetadataCacheTTL, "labels.metadataCacheTTL"),
-			MetadataCacheSize: r.Labels.MetadataCacheSize,
+			KnownLabels:               r.Labels.KnownLabels,
+			ServiceNameFallbackFields: r.Labels.ServiceNameFallbackFields,
+			LabelRemap:                r.Labels.LabelRemap,
+			MetadataCacheTTL:          dur(r.Labels.MetadataCacheTTL, "labels.metadataCacheTTL"),
+			MetadataCacheSize:         r.Labels.MetadataCacheSize,
 		},
 		Log: LogConfig{
 			Level:  r.Log.Level,

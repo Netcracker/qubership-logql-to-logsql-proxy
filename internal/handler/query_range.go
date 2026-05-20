@@ -134,7 +134,10 @@ func (d *Deps) handleQuery(ctx *fasthttp.RequestCtx, instant bool) {
 	}
 
 	// Translate to LogsQL.
-	result, err := translator.Translate(ast, translator.Options{LabelRemap: d.Cfg.Labels.LabelRemap})
+	result, err := translator.Translate(ast, translator.Options{
+		LabelRemap:                d.Cfg.Labels.LabelRemap,
+		ServiceNameFallbackFields: d.Cfg.Labels.ServiceNameFallbackFields,
+	})
 	if err != nil {
 		writeError(ctx, fasthttp.StatusBadRequest, "bad_data", err.Error())
 		return

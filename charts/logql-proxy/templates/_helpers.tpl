@@ -121,6 +121,14 @@ labels:
   {{- else }}
   knownLabels: []
   {{- end }}
+  {{- if .Values.proxy.labels.serviceNameFallbackFields }}
+  serviceNameFallbackFields:
+    {{- toYaml .Values.proxy.labels.serviceNameFallbackFields | nindent 4 }}
+  {{- end }}
+  {{- if .Values.proxy.labels.labelRemap }}
+  labelRemap:
+    {{- toYaml .Values.proxy.labels.labelRemap | nindent 4 }}
+  {{- end }}
   metadataCacheTTL: {{ .Values.proxy.labels.metadataCacheTTL | quote }}
   metadataCacheSize: {{ .Values.proxy.labels.metadataCacheSize }}
 

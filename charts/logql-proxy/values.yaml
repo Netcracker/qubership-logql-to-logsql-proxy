@@ -224,6 +224,15 @@ proxy:
     # Static label allowlist returned by /loki/api/v1/labels.
     # Empty = discover dynamically from VictoriaLogs /field_names on every request.
     knownLabels: []
+
+    # Optional fallback fields used to synthesize Grafana's service_name label
+    # when the logs do not store service_name directly.
+    serviceNameFallbackFields: []
+
+    # Optional label translation for legacy pipelines that do not store
+    # Grafana-compatible labels directly.
+    labelRemap: {}
+
     metadataCacheTTL: "5m"
     metadataCacheSize: 256
 

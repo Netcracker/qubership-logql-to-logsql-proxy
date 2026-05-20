@@ -2,6 +2,7 @@ package translator_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -67,6 +68,37 @@ func TestTranslateRegexMatcher(t *testing.T) {
 	want := `app:~"api.*" AND NOT ns:~"test.*"`
 	if r.LogsQL != want {
 		t.Errorf("got %q, want %q", r.LogsQL, want)
+	}
+}
+
+func TestTranslateSyntheticServiceNameRegexMatcher(t *testing.T) {
+	r := parseAndTranslate(t, `{service_name=~".+"}`)
+	for _, want := range []string{
+		`service_name:~".+"`,
+		`"service.name":~".+"`,
+		`app:~".+"`,
+		`container:~".+"`,
+	} {
+		if !strings.Contains(r.LogsQL, want) {
+			t.Errorf("LogsQL %q does not contain %q", r.LogsQL, want)
+		}
+	}
+}
+
+func TestTranslateSyntheticServiceNameNotEmptyMatcher(t *testing.T) {
+	r := parseAndTranslate(t, `{service_name!=""}`)
+	for _, want := range []string{
+		`service_name:~".+"`,
+		`"service.name":~".+"`,
+		`app:~".+"`,
+		`container:~".+"`,
+	} {
+		if !strings.Contains(r.LogsQL, want) {
+			t.Errorf("LogsQL %q does not contain %q", r.LogsQL, want)
+		}
+	}
+	if strings.Contains(r.LogsQL, `NOT service_name:=""`) {
+		t.Errorf("LogsQL %q should not use direct NOT empty matcher for synthetic service_name", r.LogsQL)
 	}
 }
 

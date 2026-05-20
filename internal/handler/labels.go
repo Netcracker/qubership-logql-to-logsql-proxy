@@ -149,7 +149,10 @@ func (d *Deps) DetectedFields(ctx *fasthttp.RequestCtx) {
 	}
 
 	queryStr := string(ctx.QueryArgs().Peek("query"))
-	logsqlFilter := bestEffortLogsQLFilter(queryStr, translator.Options{LabelRemap: d.Cfg.Labels.LabelRemap})
+	logsqlFilter := bestEffortLogsQLFilter(queryStr, translator.Options{
+		LabelRemap:                d.Cfg.Labels.LabelRemap,
+		ServiceNameFallbackFields: d.Cfg.Labels.ServiceNameFallbackFields,
+	})
 
 	names, err := d.VL.FieldNames(reqContext(ctx), vlogs.FieldNamesRequest{
 		Query: logsqlFilter,

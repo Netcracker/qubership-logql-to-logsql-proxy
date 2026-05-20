@@ -833,6 +833,44 @@ func TestIndexVolumeWithQuery(t *testing.T) {
 	}
 }
 
+func TestIndexVolumeSynthesizesServiceNameFromFallbackFields(t *testing.T) {
+	vl := &mockVL{
+		queryLogsRecs: []vlogs.Record{
+			{"_time": "2024-01-15T12:00:00Z", "_msg": "r1", "container": "frontend"},
+			{"_time": "2024-01-15T12:00:01Z", "_msg": "r2", "container": "frontend"},
+			{"_time": "2024-01-15T12:00:02Z", "_msg": "r3", "app": "backend"},
+		},
+	}
+	addr, cleanup := newTestServer(t, buildHandler(newDeps(vl)))
+	defer cleanup()
+
+	resp, err := http.Get(addr +
+		`/loki/api/v1/index/volume?query={service_name=~".+"}&start=1705320000&end=1705323600`)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer closeRespBody(t, resp)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	var body loki.IndexVolumeResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if len(body.Data.Result) != 2 {
+		t.Fatalf("expected 2 result entries, got %d", len(body.Data.Result))
+	}
+	if got := body.Data.Result[0].Metric["service_name"]; got != "frontend" {
+		t.Fatalf("first entry service_name = %q, want frontend", got)
+	}
+	if got := body.Data.Result[1].Metric["service_name"]; got != "backend" {
+		t.Fatalf("second entry service_name = %q, want backend", got)
+	}
+}
+
 func TestIndexVolumeMultiLabelGrouping(t *testing.T) {
 	vl := &mockVL{
 		queryLogsRecs: []vlogs.Record{

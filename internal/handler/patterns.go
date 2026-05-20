@@ -70,7 +70,10 @@ func (d *Deps) Patterns(ctx *fasthttp.RequestCtx) {
 		return
 	}
 
-	xlat, err := translator.Translate(ast, translator.Options{LabelRemap: d.Cfg.Labels.LabelRemap})
+	xlat, err := translator.Translate(ast, translator.Options{
+		LabelRemap:                d.Cfg.Labels.LabelRemap,
+		ServiceNameFallbackFields: d.Cfg.Labels.ServiceNameFallbackFields,
+	})
 	if err != nil {
 		writeError(ctx, fasthttp.StatusBadRequest, "bad_data", err.Error())
 		return

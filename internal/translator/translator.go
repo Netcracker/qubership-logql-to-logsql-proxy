@@ -33,6 +33,27 @@ import (
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/parser"
 )
 
+var defaultServiceNameFallbackFields = []string{
+	"service_name",
+	"service.name",
+	"service",
+	"labels.app.kubernetes.io/name",
+	"labels.k8s-app",
+	"labels.app",
+	"app",
+	"application",
+	"app_name",
+	"app_kubernetes_io_name",
+	"container",
+	"k8s.container.name",
+	"container.name",
+	"container_name",
+	"k8s_container_name",
+	"job",
+	"k8s.job.name",
+	"k8s_job_name",
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Public types
 // ────────────────────────────────────────────────────────────────────────────
@@ -79,6 +100,10 @@ type Options struct {
 	// "by (...)" grouping clause before emitting the LogsQL string.
 	// A nil map disables all remapping.
 	LabelRemap map[string]string
+
+	// ServiceNameFallbackFields controls which fields should be consulted when
+	// Grafana uses the synthetic service_name label.
+	ServiceNameFallbackFields []string
 }
 
 // TranslationError is returned when an AST node cannot be expressed in LogsQL.
@@ -194,7 +219,11 @@ func translateLogQuery(lq *parser.LogQuery, opts Options) (logsql string, hasJSO
 }
 
 func translateMatcher(m parser.LabelMatcher, opts Options) (string, error) {
-	f := quoteLabelName(remapName(m.Name, opts.LabelRemap))
+	name := remapName(m.Name, opts.LabelRemap)
+	if name == "service_name" {
+		return translateSyntheticServiceNameMatcher(m, opts.ServiceNameFallbackFields)
+	}
+	f := quoteLabelName(name)
 	switch m.Type {
 	case parser.Eq:
 		return fmt.Sprintf(`%s:="%s"`, f, escapeLit(m.Value)), nil
@@ -207,6 +236,45 @@ func translateMatcher(m parser.LabelMatcher, opts Options) (string, error) {
 	default:
 		return "", &TranslationError{Msg: fmt.Sprintf("unknown match type %d", m.Type)}
 	}
+}
+
+func translateSyntheticServiceNameMatcher(m parser.LabelMatcher, fields []string) (string, error) {
+	if len(fields) == 0 {
+		fields = defaultServiceNameFallbackFields
+	}
+	if len(fields) == 0 {
+		return "", &TranslationError{Msg: "service_name fallback fields are not configured"}
+	}
+
+	parts := make([]string, 0, len(fields))
+	for _, field := range fields {
+		qf := quoteLabelName(field)
+		switch m.Type {
+		case parser.Eq:
+			parts = append(parts, fmt.Sprintf(`%s:="%s"`, qf, escapeLit(m.Value)))
+		case parser.Neq:
+			if m.Value == "" {
+				parts = append(parts, fmt.Sprintf(`%s:~".+"`, qf))
+			} else {
+				parts = append(parts, fmt.Sprintf(`NOT %s:="%s"`, qf, escapeLit(m.Value)))
+			}
+		case parser.Re:
+			parts = append(parts, fmt.Sprintf(`%s:~"%s"`, qf, escapeRe(m.Value)))
+		case parser.Nre:
+			parts = append(parts, fmt.Sprintf(`NOT %s:~"%s"`, qf, escapeRe(m.Value)))
+		default:
+			return "", &TranslationError{Msg: fmt.Sprintf("unknown match type %d", m.Type)}
+		}
+	}
+
+	joiner := " OR "
+	if m.Type == parser.Neq && m.Value != "" {
+		joiner = " AND "
+	}
+	if m.Type == parser.Nre {
+		joiner = " AND "
+	}
+	return "(" + strings.Join(parts, joiner) + ")", nil
 }
 
 // vlInternalFields lists VictoriaLogs field names that use non-standard filter
