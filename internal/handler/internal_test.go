@@ -606,6 +606,63 @@ func TestHandleMetricQueryAndParseRecordTime(t *testing.T) {
 	}
 }
 
+func TestAggregationQueryDoesNotCapScannedRecordsByMaxLimit(t *testing.T) {
+	var got vlogs.LogQueryRequest
+	deps := testDeps(&stubVL{
+		queryLogsFn: func(_ context.Context, req vlogs.LogQueryRequest, fn func(vlogs.Record) error) error {
+			got = req
+			return fn(vlogs.Record{
+				"_time":          "2024-01-15T12:00:00Z",
+				"_msg":           "m",
+				"detected_level": "error",
+			})
+		},
+	})
+
+	ctx := newCtx(`/loki/api/v1/query_range?query=count+by+(detected_level)+(count_over_time({app="api"}[2s]))&start=1705320000&end=1705323600&step=2`)
+	deps.QueryRange(ctx)
+
+	if ctx.Response.StatusCode() != fasthttp.StatusOK {
+		t.Fatalf("status = %d, want 200 body=%s", ctx.Response.StatusCode(), ctx.Response.Body())
+	}
+	if got.Query != `app:="api"` {
+		t.Fatalf("QueryLogs query = %q, want %q", got.Query, `app:="api"`)
+	}
+	if got.Limit != 0 {
+		t.Fatalf("QueryLogs limit = %d, want 0 (no record cap for aggregation queries)", got.Limit)
+	}
+}
+
+func TestAggregationQueryUsesConfiguredScanLimit(t *testing.T) {
+	var got vlogs.LogQueryRequest
+	deps := testDeps(&stubVL{
+		queryLogsFn: func(_ context.Context, req vlogs.LogQueryRequest, fn func(vlogs.Record) error) error {
+			got = req
+			return fn(vlogs.Record{
+				"_time":          "2024-01-15T12:00:00Z",
+				"_msg":           "m",
+				"detected_level": "error",
+			})
+		},
+	})
+	deps.Cfg.Limits.AggregationScanLimit = 42
+
+	ctx := newCtx(`/loki/api/v1/query_range?query=sum+by+(detected_level)+(count_over_time({app="api"}[2s]))&start=1705320000&end=1705323600&step=2`)
+	deps.QueryRange(ctx)
+
+	if ctx.Response.StatusCode() != fasthttp.StatusOK {
+		t.Fatalf("status = %d, want 200 body=%s", ctx.Response.StatusCode(), ctx.Response.Body())
+	}
+	if got.Limit != 42 {
+		t.Fatalf("QueryLogs limit = %d, want configured 42", got.Limit)
+	}
+
+	body := decodeBody[loki.MatrixResponse](t, ctx)
+	if len(body.Data.Result) != 1 {
+		t.Fatalf("result series = %d, want 1", len(body.Data.Result))
+	}
+}
+
 func TestQueryRangeRateCounter(t *testing.T) {
 	var got vlogs.HitsQueryRequest
 	deps := testDeps(&stubVL{

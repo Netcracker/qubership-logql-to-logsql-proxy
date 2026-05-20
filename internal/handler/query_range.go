@@ -277,12 +277,16 @@ func (d *Deps) handleAggregationQuery(
 	seriesMetrics := make(map[string]map[string]string)
 	rangeDur := end.Sub(start)
 
-	scanErr := d.VL.QueryLogs(reqContext(ctx), vlogs.LogQueryRequest{
+	req := vlogs.LogQueryRequest{
 		Query: result.LogsQL,
 		Start: start,
 		End:   end,
-		Limit: d.Cfg.Limits.MaxLimit,
-	}, func(rec vlogs.Record) error {
+	}
+	if d.Cfg.Limits.AggregationScanLimit > 0 {
+		req.Limit = d.Cfg.Limits.AggregationScanLimit
+	}
+
+	scanErr := d.VL.QueryLogs(reqContext(ctx), req, func(rec vlogs.Record) error {
 		t := parseRecordTime(rec["_time"])
 		offset := t.Sub(start)
 		if offset < 0 || offset >= rangeDur {

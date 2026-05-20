@@ -90,6 +90,9 @@ func TestLoadAppliesDefaultsFileEnvAndPasswordFile(t *testing.T) {
 	if cfg.Limits.MaxStreamsPerResponse != 5000 {
 		t.Errorf("MaxStreamsPerResponse = %d, want default 5000", cfg.Limits.MaxStreamsPerResponse)
 	}
+	if cfg.Limits.AggregationScanLimit != 0 {
+		t.Errorf("AggregationScanLimit = %d, want default 0", cfg.Limits.AggregationScanLimit)
+	}
 }
 
 func TestLoadAllowsExplicitLabelRemapFromConfig(t *testing.T) {
@@ -153,6 +156,35 @@ func TestLoadAllowsExplicitServiceNameFallbackFieldsFromConfig(t *testing.T) {
 	}
 }
 
+func TestLoadAllowsExplicitAggregationScanLimitFromConfig(t *testing.T) {
+	cfgFile, err := os.CreateTemp(t.TempDir(), "config-*.yaml")
+	if err != nil {
+		t.Fatalf("CreateTemp(config): %v", err)
+	}
+	cfgYAML := strings.Join([]string{
+		"vlogs:",
+		"  url: http://victorialogs:9428",
+		"limits:",
+		"  aggregationScanLimit: 1234",
+		"",
+	}, "\n")
+	if _, err := cfgFile.WriteString(cfgYAML); err != nil {
+		t.Fatalf("WriteString(config): %v", err)
+	}
+	if err := cfgFile.Close(); err != nil {
+		t.Fatalf("Close(config): %v", err)
+	}
+
+	cfg, err := Load(cfgFile.Name())
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+
+	if cfg.Limits.AggregationScanLimit != 1234 {
+		t.Fatalf("AggregationScanLimit = %d, want 1234", cfg.Limits.AggregationScanLimit)
+	}
+}
+
 func TestLoadReturnsConversionErrorForInvalidDuration(t *testing.T) {
 	cfgFile, err := os.CreateTemp(t.TempDir(), "config-*.yaml")
 	if err != nil {
@@ -181,6 +213,7 @@ func TestValidateReturnsCombinedErrors(t *testing.T) {
 			MaxQueueDepth:         -1,
 			MaxResponseBodyBytes:  0,
 			MaxStreamsPerResponse: 0,
+			AggregationScanLimit:  -1,
 			MaxMemoryMB:           0,
 			MaxQueryRangeHours:    0,
 			MaxLimit:              1,
@@ -204,6 +237,7 @@ func TestValidateReturnsCombinedErrors(t *testing.T) {
 		"limits.maxQueueDepth must be >= 0",
 		"limits.maxResponseBodyBytes must be >= 1",
 		"limits.maxStreamsPerResponse must be >= 1",
+		"limits.aggregationScanLimit must be >= 0",
 		"limits.maxMemoryMB must be >= 1",
 		"limits.maxQueryRangeHours must be >= 1",
 		`limits.defaultLimit (2) must be <= limits.maxLimit (1)`,

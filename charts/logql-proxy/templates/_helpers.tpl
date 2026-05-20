@@ -109,6 +109,7 @@ limits:
   maxQueueDepth: {{ .Values.proxy.limits.maxQueueDepth }}
   maxResponseBodyBytes: {{ .Values.proxy.limits.maxResponseBodyBytes | int }}
   maxStreamsPerResponse: {{ .Values.proxy.limits.maxStreamsPerResponse }}
+  aggregationScanLimit: {{ .Values.proxy.limits.aggregationScanLimit }}
   maxMemoryMB: {{ .Values.proxy.limits.maxMemoryMB }}
   maxQueryRangeHours: {{ .Values.proxy.limits.maxQueryRangeHours }}
   maxLimit: {{ .Values.proxy.limits.maxLimit }}

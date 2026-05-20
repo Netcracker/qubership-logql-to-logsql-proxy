@@ -66,6 +66,7 @@ type LimitsConfig struct {
 	MaxQueueDepth         int   // waiting requests before 429, default: 100
 	MaxResponseBodyBytes  int64 // per-request VL body cap, default: 64 MiB
 	MaxStreamsPerResponse int   // Loki stream accumulation cap, default: 5000
+	AggregationScanLimit  int   // cap for aggregation scan queries; 0 means unlimited
 	MaxMemoryMB           int64 // GOMEMLIMIT target, default: 512
 	MaxQueryRangeHours    int   // reject time ranges wider than this, default: 24
 	MaxLimit              int   // cap on ?limit= param, default: 5000
@@ -152,6 +153,7 @@ type rawLimitsConfig struct {
 	MaxQueueDepth         int   `yaml:"maxQueueDepth"`
 	MaxResponseBodyBytes  int64 `yaml:"maxResponseBodyBytes"`
 	MaxStreamsPerResponse int   `yaml:"maxStreamsPerResponse"`
+	AggregationScanLimit  int   `yaml:"aggregationScanLimit"`
 	MaxMemoryMB           int64 `yaml:"maxMemoryMB"`
 	MaxQueryRangeHours    int   `yaml:"maxQueryRangeHours"`
 	MaxLimit              int   `yaml:"maxLimit"`
@@ -189,6 +191,7 @@ func defaultRaw() *rawConfig {
 	r.Limits.MaxQueueDepth = 100
 	r.Limits.MaxResponseBodyBytes = 64 * 1024 * 1024 // 64 MiB
 	r.Limits.MaxStreamsPerResponse = 5000
+	r.Limits.AggregationScanLimit = 0
 	r.Limits.MaxMemoryMB = 512
 	r.Limits.MaxQueryRangeHours = 24
 	r.Limits.MaxLimit = 5000
@@ -305,6 +308,7 @@ func applyEnv(r *rawConfig) {
 	envInt("PROXY_LIMITS_MAXQUEUEDEPTH", &r.Limits.MaxQueueDepth)
 	envInt64("PROXY_LIMITS_MAXRESPONSEBODYBYTES", &r.Limits.MaxResponseBodyBytes)
 	envInt("PROXY_LIMITS_MAXSTREAMSPERRESPONSE", &r.Limits.MaxStreamsPerResponse)
+	envInt("PROXY_LIMITS_AGGREGATIONSCANLIMIT", &r.Limits.AggregationScanLimit)
 	envInt64("PROXY_LIMITS_MAXMEMORYMB", &r.Limits.MaxMemoryMB)
 	envInt("PROXY_LIMITS_MAXQUERYRANGEHOURS", &r.Limits.MaxQueryRangeHours)
 	envInt("PROXY_LIMITS_MAXLIMIT", &r.Limits.MaxLimit)
@@ -379,6 +383,7 @@ func convert(r *rawConfig) (*Config, error) {
 			MaxQueueDepth:         r.Limits.MaxQueueDepth,
 			MaxResponseBodyBytes:  r.Limits.MaxResponseBodyBytes,
 			MaxStreamsPerResponse: r.Limits.MaxStreamsPerResponse,
+			AggregationScanLimit:  r.Limits.AggregationScanLimit,
 			MaxMemoryMB:           r.Limits.MaxMemoryMB,
 			MaxQueryRangeHours:    r.Limits.MaxQueryRangeHours,
 			MaxLimit:              r.Limits.MaxLimit,
@@ -432,6 +437,9 @@ func validate(cfg *Config) error {
 	}
 	if cfg.Limits.MaxStreamsPerResponse < 1 {
 		errs = append(errs, errors.New("limits.maxStreamsPerResponse must be >= 1"))
+	}
+	if cfg.Limits.AggregationScanLimit < 0 {
+		errs = append(errs, errors.New("limits.aggregationScanLimit must be >= 0"))
 	}
 	if cfg.Limits.MaxMemoryMB < 1 {
 		errs = append(errs, errors.New("limits.maxMemoryMB must be >= 1"))

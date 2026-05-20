@@ -215,6 +215,7 @@ proxy:
     maxQueueDepth: 100
     maxResponseBodyBytes: 67108864   # 64 MiB
     maxStreamsPerResponse: 5000
+    aggregationScanLimit: 0          # 0 = unlimited for aggregation queries
     maxMemoryMB: 512
     maxQueryRangeHours: 24
     maxLimit: 5000

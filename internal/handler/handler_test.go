@@ -28,10 +28,12 @@ type mockVL struct {
 	queryLogsRecs []vlogs.Record
 	queryHitsBkts []vlogs.HitBucket
 	queryHitsErr  error
+	queryHitsFn   func(context.Context, vlogs.HitsQueryRequest) ([]vlogs.HitBucket, error)
 	fieldNames    []string
 	fieldNamesErr error
 	fieldValues   []string
 	fieldValsErr  error
+	fieldValuesFn func(context.Context, vlogs.FieldValuesRequest) ([]string, error)
 }
 
 func (m *mockVL) QueryLogs(_ context.Context, _ vlogs.LogQueryRequest, fn func(vlogs.Record) error) error {
@@ -46,7 +48,10 @@ func (m *mockVL) QueryLogs(_ context.Context, _ vlogs.LogQueryRequest, fn func(v
 	return nil
 }
 
-func (m *mockVL) QueryHits(_ context.Context, _ vlogs.HitsQueryRequest) ([]vlogs.HitBucket, error) {
+func (m *mockVL) QueryHits(ctx context.Context, req vlogs.HitsQueryRequest) ([]vlogs.HitBucket, error) {
+	if m.queryHitsFn != nil {
+		return m.queryHitsFn(ctx, req)
+	}
 	return m.queryHitsBkts, m.queryHitsErr
 }
 
@@ -54,7 +59,10 @@ func (m *mockVL) FieldNames(_ context.Context, _ vlogs.FieldNamesRequest) ([]str
 	return m.fieldNames, m.fieldNamesErr
 }
 
-func (m *mockVL) FieldValues(_ context.Context, _ vlogs.FieldValuesRequest) ([]string, error) {
+func (m *mockVL) FieldValues(ctx context.Context, req vlogs.FieldValuesRequest) ([]string, error) {
+	if m.fieldValuesFn != nil {
+		return m.fieldValuesFn(ctx, req)
+	}
 	return m.fieldValues, m.fieldValsErr
 }
 
@@ -409,14 +417,11 @@ func TestQueryRangeMetricCountOverTime(t *testing.T) {
 // ────────────────────────────────────────────────────────────────────────────
 
 func TestQueryRangeAggregationSumBy(t *testing.T) {
-	// Three records: two "info" in bucket 0, one "error" in bucket 0,
-	// one "info" in bucket 1 (2 s later).
-	base := time.Unix(1705320000, 0).UTC()
 	vl := &mockVL{
 		queryLogsRecs: []vlogs.Record{
-			{"_time": base.Format(time.RFC3339Nano), "_msg": "r1", "detected_level": "info"},
-			{"_time": base.Format(time.RFC3339Nano), "_msg": "r2", "detected_level": "error"},
-			{"_time": base.Add(2 * time.Second).Format(time.RFC3339Nano), "_msg": "r3", "detected_level": "info"},
+			{"_time": time.Unix(1705320000, 0).UTC().Format(time.RFC3339Nano), "_msg": "r1", "detected_level": "info"},
+			{"_time": time.Unix(1705320000, 0).UTC().Format(time.RFC3339Nano), "_msg": "r2", "detected_level": "error"},
+			{"_time": time.Unix(1705320002, 0).UTC().Format(time.RFC3339Nano), "_msg": "r3", "detected_level": "info"},
 		},
 	}
 	addr, cleanup := newTestServer(t, buildHandler(newDeps(vl)))
