@@ -449,6 +449,7 @@ func logQLPatternToRegex(pattern string) string {
 // looking it up in the provided map. Returns name unchanged when the map is
 // nil or contains no entry for name.
 func remapName(name string, remap map[string]string) string {
+	name = normalizeGrafanaLabelAlias(name)
 	if mapped, ok := remap[name]; ok {
 		return mapped
 	}
@@ -458,7 +459,7 @@ func remapName(name string, remap map[string]string) string {
 // remapNames applies remapName to each element of a slice, returning a new
 // slice. Returns the original slice unchanged when remap is nil or empty.
 func remapNames(names []string, remap map[string]string) []string {
-	if len(remap) == 0 || len(names) == 0 {
+	if len(names) == 0 {
 		return names
 	}
 	out := make([]string, len(names))
@@ -466,6 +467,14 @@ func remapNames(names []string, remap map[string]string) []string {
 		out[i] = remapName(n, remap)
 	}
 	return out
+}
+
+func normalizeGrafanaLabelAlias(name string) string {
+	const k8sAppPrefix = "labels.app.kubernetes.io-"
+	if strings.HasPrefix(name, k8sAppPrefix) {
+		return "labels.app.kubernetes.io/" + strings.TrimPrefix(name, k8sAppPrefix)
+	}
+	return name
 }
 
 // quoteLabelName returns a LogsQL-safe representation of a field name.

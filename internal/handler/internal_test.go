@@ -279,6 +279,30 @@ func TestDetectedFieldsUsesBestEffortFilter(t *testing.T) {
 	}
 }
 
+func TestDetectedFieldsIgnoresPipelineStagesForScoping(t *testing.T) {
+	var gotFilter string
+	deps := testDeps(&stubVL{
+		fieldNamesFn: func(_ context.Context, req vlogs.FieldNamesRequest) ([]string, error) {
+			gotFilter = req.Query
+			return []string{"container", "namespace"}, nil
+		},
+	})
+	deps.Cfg.Labels.ServiceNameFallbackFields = []string{"service_name", "container"}
+
+	ctx := newCtx(`/loki/api/v1/detected_fields?query={service_name="qubership-log-generator"} | json | logfmt | drop __error__, __error_details__&start=1705320000&end=1705323600`)
+	deps.DetectedFields(ctx)
+
+	if ctx.Response.StatusCode() != fasthttp.StatusOK {
+		t.Fatalf("status = %d, want 200 body=%s", ctx.Response.StatusCode(), ctx.Response.Body())
+	}
+	if strings.Contains(gotFilter, "unpack_logfmt") {
+		t.Fatalf("filter = %q, did not expect pipeline terms", gotFilter)
+	}
+	if !strings.Contains(gotFilter, `container:="qubership-log-generator"`) {
+		t.Fatalf("filter = %q, expected selector-based scoping", gotFilter)
+	}
+}
+
 func TestDetectedFieldsErrorReturnsBadGateway(t *testing.T) {
 	deps := testDeps(&stubVL{
 		fieldNamesFn: func(_ context.Context, req vlogs.FieldNamesRequest) ([]string, error) {
@@ -307,6 +331,12 @@ func TestHelpersCoverFallbackAndParsing(t *testing.T) {
 	}
 	if got := bestEffortLogsQLFilter(`not logql`, translator.Options{}); got != "*" {
 		t.Errorf("invalid filter = %q, want *", got)
+	}
+	if got := selectorOnlyLogsQLFilter(`{app="api"} | json | logfmt`, translator.Options{}); got != `app:="api"` {
+		t.Errorf("selectorOnlyLogsQLFilter() = %q, want %q", got, `app:="api"`)
+	}
+	if got := selectorOnlyLogsQLFilter(`not logql`, translator.Options{}); got != "*" {
+		t.Errorf("selectorOnlyLogsQLFilter(invalid) = %q, want *", got)
 	}
 	if got := extractStreamSelector(`sum(rate({app="api"}[5m]))`); got != `{app="api"}` {
 		t.Errorf("extractStreamSelector() = %q", got)

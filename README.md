@@ -124,30 +124,31 @@ flowchart TD
 
 `DataSources`:
 
-* [ ] Show an error during manual DataSource add in the Grafana UI
+* [x] Show an error during manual DataSource add in the Grafana UI
   * The proxy most likely returns empty data instead of the expected `1`
 
 `Explorer`:
 
-* [ ] Explore doesn't work
+* [x] Explore doesn't work
+  * Basic Explore flows work; not all operations have been verified yet
 
 `Log Drilldown` / `Log Summary`:
 
-* [ ] Default view with `service` label doesn't work
+* [x] Default view with `service` label doesn't work
 
 `Logs Drilldown` / `Logs Details`:
 
-* [ ] `Log Levels` shows an empty list of levels
-* [ ] `Log Volume` shows incorrect data
+* [x] `Log Levels` shows an empty list of levels
+* [x] `Log Volume` shows incorrect data
 * [ ] There are no level colors in histograms
-* [ ] Some label histograms fail with the error
+* [x] Some label histograms fail with the error
 
     ```bash
     "{\"status\":\"error\",\"errorType\":\"execution\",\"error\":\"VictoriaLogs query failed: QueryLogs: VL returned HTTP 400: cannot parse query [namespace:=\\\"consul-service\\\" AND NOT _stream:=\\\"\\\"]: unexpected token \\\"=\\\" instead of '{' in _stream filter; context: [space:=\\\"consul-service\\\" AND NOT _stream:=]\"}\n"
     ```
 
 * [ ] In `Fields`, `Show panels with errors` doesn't work
-* [ ] In `Patterns`, it seems to show incorrect graphs
+* [x] In `Patterns`, it seems to show incorrect graphs
 * [ ] Some services' log view crashes with the error:
 
     ```bash
@@ -172,4 +173,4 @@ flowchart TD
     at https://grafana.kubernetes.org/public/build/3688.3a2e7e47341617a764ef.js:1:87961
     ```
 
-* [ ] `Include` patterns doesn't work
+* [x] `Include` patterns doesn't work

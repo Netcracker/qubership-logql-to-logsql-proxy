@@ -134,6 +134,20 @@ func TestTranslateInternalTimeSelectorNotEmptyIsDropped(t *testing.T) {
 	}
 }
 
+func TestTranslateGrafanaKubernetesLabelAlias(t *testing.T) {
+	r := parseAndTranslate(t, `{service_name="vmagent"} | labels.app.kubernetes.io-technology!=""`)
+	if !strings.Contains(r.LogsQL, `"labels.app.kubernetes.io/technology":=""`) {
+		t.Errorf("LogsQL %q does not contain normalized kubernetes label alias", r.LogsQL)
+	}
+}
+
+func TestTranslateGrafanaKubernetesLabelAliasInAggregationBy(t *testing.T) {
+	r := parseAndTranslate(t, `sum by (labels.app.kubernetes.io-technology) (count_over_time({service_name="vmagent"}[2s]))`)
+	if len(r.AggregateBy) != 1 || r.AggregateBy[0] != "labels.app.kubernetes.io/technology" {
+		t.Errorf("AggregateBy = %v, want [labels.app.kubernetes.io/technology]", r.AggregateBy)
+	}
+}
+
 func TestTranslateLineFilter(t *testing.T) {
 	r := parseAndTranslate(t, `{app="api"} |= "error"`)
 	want := `app:="api" AND _msg:"error"`

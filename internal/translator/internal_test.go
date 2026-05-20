@@ -93,4 +93,7 @@ func TestTranslationErrorAndLabelFilterHelpers(t *testing.T) {
 	if got := remapNames([]string{"detected_level", "app"}, map[string]string{"detected_level": "level"}); len(got) != 2 || got[0] != "level" || got[1] != "app" {
 		t.Errorf("remapNames() = %v", got)
 	}
+	if got := remapName("labels.app.kubernetes.io-technology", nil); got != "labels.app.kubernetes.io/technology" {
+		t.Errorf("remapName(grafana alias) = %q", got)
+	}
 }

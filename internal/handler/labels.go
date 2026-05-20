@@ -133,10 +133,11 @@ func toDetectedLabels(names []string) []loki.DetectedLabel {
 // (with their types and cardinalities) present in the selected log streams.
 // It is backed by VictoriaLogs' GET /select/logsql/field_names endpoint.
 //
-// The query may contain unsupported pipeline stages such as `| drop` that the
-// proxy parser cannot translate (Grafana appends these automatically). This
-// handler uses bestEffortLogsQLFilter to extract as much scoping information
-// as possible from the query before falling back to a match-all filter.
+// The query may contain parser and filter pipeline stages such as `| json`,
+// `| logfmt`, and `| drop`. For field discovery we only need the stream
+// selector scoping; including the pipeline can surface transient extracted
+// tokens from _msg (for example via logfmt unpacking) as if they were stable
+// fields. This handler therefore uses only the selector portion of the query.
 //
 // VictoriaLogs does not expose per-field type or cardinality; every field is
 // returned with type="string" and cardinality=0, which is sufficient for
@@ -149,7 +150,7 @@ func (d *Deps) DetectedFields(ctx *fasthttp.RequestCtx) {
 	}
 
 	queryStr := string(ctx.QueryArgs().Peek("query"))
-	logsqlFilter := bestEffortLogsQLFilter(queryStr, translator.Options{
+	logsqlFilter := selectorOnlyLogsQLFilter(queryStr, translator.Options{
 		LabelRemap:                d.Cfg.Labels.LabelRemap,
 		ServiceNameFallbackFields: d.Cfg.Labels.ServiceNameFallbackFields,
 	})
@@ -172,6 +173,22 @@ func (d *Deps) DetectedFields(ctx *fasthttp.RequestCtx) {
 	}
 
 	writeJSON(ctx, fasthttp.StatusOK, loki.DetectedFieldsResponse{Fields: fields})
+}
+
+func selectorOnlyLogsQLFilter(queryStr string, opts translator.Options) string {
+	if queryStr == "" {
+		return "*"
+	}
+	selector := extractStreamSelector(queryStr)
+	if selector == "" {
+		return "*"
+	}
+	if ast, err := parser.Parse(selector); err == nil {
+		if result, err := translator.Translate(ast, opts); err == nil {
+			return result.LogsQL
+		}
+	}
+	return "*"
 }
 
 // bestEffortLogsQLFilter converts a LogQL query string to a LogsQL filter on a
