@@ -52,11 +52,16 @@ func (d *Deps) handleQuery(ctx *fasthttp.RequestCtx, instant bool) {
 	// Loki datasource connection. It is not valid LogQL; return a minimal
 	// success response so the datasource health check passes.
 	if isVectorExpr(queryStr) {
-		writeJSON(ctx, fasthttp.StatusOK, loki.MatrixResponse{
+		writeJSON(ctx, fasthttp.StatusOK, loki.VectorResponse{
 			Status: "success",
-			Data: loki.MatrixData{
+			Data: loki.VectorData{
 				ResultType: "vector",
-				Result:     []loki.MatrixSeries{},
+				Result: []loki.VectorSample{
+					{
+						Metric: map[string]string{},
+						Value:  []interface{}{float64(time.Now().Unix()), "2"},
+					},
+				},
 			},
 		})
 		return
@@ -129,7 +134,10 @@ func (d *Deps) handleQuery(ctx *fasthttp.RequestCtx, instant bool) {
 	}
 
 	// Translate to LogsQL.
-	result, err := translator.Translate(ast, translator.Options{LabelRemap: d.Cfg.Labels.LabelRemap})
+	result, err := translator.Translate(ast, translator.Options{
+		LabelRemap:                d.Cfg.Labels.LabelRemap,
+		ServiceNameFallbackFields: d.Cfg.Labels.ServiceNameFallbackFields,
+	})
 	if err != nil {
 		writeError(ctx, fasthttp.StatusBadRequest, "bad_data", err.Error())
 		return
@@ -269,12 +277,16 @@ func (d *Deps) handleAggregationQuery(
 	seriesMetrics := make(map[string]map[string]string)
 	rangeDur := end.Sub(start)
 
-	scanErr := d.VL.QueryLogs(reqContext(ctx), vlogs.LogQueryRequest{
+	req := vlogs.LogQueryRequest{
 		Query: result.LogsQL,
 		Start: start,
 		End:   end,
-		Limit: d.Cfg.Limits.MaxLimit,
-	}, func(rec vlogs.Record) error {
+	}
+	if d.Cfg.Limits.AggregationScanLimit > 0 {
+		req.Limit = d.Cfg.Limits.AggregationScanLimit
+	}
+
+	scanErr := d.VL.QueryLogs(reqContext(ctx), req, func(rec vlogs.Record) error {
 		t := parseRecordTime(rec["_time"])
 		offset := t.Sub(start)
 		if offset < 0 || offset >= rangeDur {

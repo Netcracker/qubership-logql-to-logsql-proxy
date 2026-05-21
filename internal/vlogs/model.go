@@ -78,19 +78,25 @@ type vlFieldEntry struct {
 }
 
 // vlHitsResponse is the JSON body returned by /select/logsql/hits.
-// VictoriaLogs returns a top-level "hits" array where each entry represents
-// one time bucket.
+// VictoriaLogs has used at least two wire formats across releases:
+//
+// Old:
 //
 //	{"hits":[{"timestamp":"2024-01-15T12:00:00Z","hits":42}, ...]}
 //
-// NOTE: verify this against your VictoriaLogs version; the format changed
-// between VL releases. Adjust vlHitEntry if necessary.
+// Newer:
+//
+//	{"hits":[{"fields":{},"timestamps":["2024-01-15T12:00:00Z"],"values":[42],"total":42}]}
+//
+// The client supports both shapes for compatibility.
 type vlHitsResponse struct {
 	Hits []vlHitEntry `json:"hits"`
 }
 
-// vlHitEntry is one bucket inside vlHitsResponse.
+// vlHitEntry is one entry inside vlHitsResponse.
 type vlHitEntry struct {
-	Timestamp string `json:"timestamp"` // RFC3339
-	Hits      int64  `json:"hits"`
+	Timestamp  string   `json:"timestamp"`  // old format
+	Hits       int64    `json:"hits"`       // old format
+	Timestamps []string `json:"timestamps"` // new format
+	Values     []int64  `json:"values"`     // new format
 }

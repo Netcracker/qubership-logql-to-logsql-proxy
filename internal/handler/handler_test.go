@@ -28,10 +28,12 @@ type mockVL struct {
 	queryLogsRecs []vlogs.Record
 	queryHitsBkts []vlogs.HitBucket
 	queryHitsErr  error
+	queryHitsFn   func(context.Context, vlogs.HitsQueryRequest) ([]vlogs.HitBucket, error)
 	fieldNames    []string
 	fieldNamesErr error
 	fieldValues   []string
 	fieldValsErr  error
+	fieldValuesFn func(context.Context, vlogs.FieldValuesRequest) ([]string, error)
 }
 
 func (m *mockVL) QueryLogs(_ context.Context, _ vlogs.LogQueryRequest, fn func(vlogs.Record) error) error {
@@ -46,7 +48,10 @@ func (m *mockVL) QueryLogs(_ context.Context, _ vlogs.LogQueryRequest, fn func(v
 	return nil
 }
 
-func (m *mockVL) QueryHits(_ context.Context, _ vlogs.HitsQueryRequest) ([]vlogs.HitBucket, error) {
+func (m *mockVL) QueryHits(ctx context.Context, req vlogs.HitsQueryRequest) ([]vlogs.HitBucket, error) {
+	if m.queryHitsFn != nil {
+		return m.queryHitsFn(ctx, req)
+	}
 	return m.queryHitsBkts, m.queryHitsErr
 }
 
@@ -54,7 +59,10 @@ func (m *mockVL) FieldNames(_ context.Context, _ vlogs.FieldNamesRequest) ([]str
 	return m.fieldNames, m.fieldNamesErr
 }
 
-func (m *mockVL) FieldValues(_ context.Context, _ vlogs.FieldValuesRequest) ([]string, error) {
+func (m *mockVL) FieldValues(ctx context.Context, req vlogs.FieldValuesRequest) ([]string, error) {
+	if m.fieldValuesFn != nil {
+		return m.fieldValuesFn(ctx, req)
+	}
 	return m.fieldValues, m.fieldValsErr
 }
 
@@ -220,6 +228,41 @@ func TestQueryRangeBadLogQL(t *testing.T) {
 	}
 }
 
+func TestQueryHealthCheckVectorExprReturnsSingleSample(t *testing.T) {
+	addr, cleanup := newTestServer(t, buildHandler(newDeps(&mockVL{})))
+	defer cleanup()
+
+	resp, err := http.Get(addr + "/loki/api/v1/query?query=vector(1)%2Bvector(1)&time=4000000000")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer closeRespBody(t, resp)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	var body loki.VectorResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Status != "success" {
+		t.Fatalf("status = %q, want success", body.Status)
+	}
+	if body.Data.ResultType != "vector" {
+		t.Fatalf("resultType = %q, want vector", body.Data.ResultType)
+	}
+	if len(body.Data.Result) != 1 {
+		t.Fatalf("result len = %d, want 1", len(body.Data.Result))
+	}
+	if len(body.Data.Result[0].Value) != 2 {
+		t.Fatalf("value len = %d, want 2", len(body.Data.Result[0].Value))
+	}
+	if got, ok := body.Data.Result[0].Value[1].(string); !ok || got != "2" {
+		t.Fatalf("sample value = %#v, want string %q", body.Data.Result[0].Value[1], "2")
+	}
+}
+
 func TestQueryRangeUnsupportedConstruct(t *testing.T) {
 	addr, cleanup := newTestServer(t, buildHandler(newDeps(&mockVL{})))
 	defer cleanup()
@@ -374,14 +417,11 @@ func TestQueryRangeMetricCountOverTime(t *testing.T) {
 // ────────────────────────────────────────────────────────────────────────────
 
 func TestQueryRangeAggregationSumBy(t *testing.T) {
-	// Three records: two "info" in bucket 0, one "error" in bucket 0,
-	// one "info" in bucket 1 (2 s later).
-	base := time.Unix(1705320000, 0).UTC()
 	vl := &mockVL{
 		queryLogsRecs: []vlogs.Record{
-			{"_time": base.Format(time.RFC3339Nano), "_msg": "r1", "detected_level": "info"},
-			{"_time": base.Format(time.RFC3339Nano), "_msg": "r2", "detected_level": "error"},
-			{"_time": base.Add(2 * time.Second).Format(time.RFC3339Nano), "_msg": "r3", "detected_level": "info"},
+			{"_time": time.Unix(1705320000, 0).UTC().Format(time.RFC3339Nano), "_msg": "r1", "detected_level": "info"},
+			{"_time": time.Unix(1705320000, 0).UTC().Format(time.RFC3339Nano), "_msg": "r2", "detected_level": "error"},
+			{"_time": time.Unix(1705320002, 0).UTC().Format(time.RFC3339Nano), "_msg": "r3", "detected_level": "info"},
 		},
 	}
 	addr, cleanup := newTestServer(t, buildHandler(newDeps(vl)))
@@ -608,6 +648,32 @@ func TestLabelValuesSuccess(t *testing.T) {
 	}
 }
 
+func TestDetectedFieldValuesSuccess(t *testing.T) {
+	vl := &mockVL{fieldValues: []string{"error", "warn"}}
+	deps := newDeps(vl)
+	deps.Cfg.Labels.LabelRemap = map[string]string{"detected_level": "level"}
+	addr, cleanup := newTestServer(t, buildHandler(deps))
+	defer cleanup()
+
+	resp, err := http.Get(addr + "/loki/api/v1/detected_field/detected_level/values?start=1705320000&end=1705323600&query=%7Bservice_name%3D%22etcd%22%7D")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer closeRespBody(t, resp)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	var body loki.LabelValuesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Data) != 2 {
+		t.Errorf("expected 2 values, got %d: %v", len(body.Data), body.Data)
+	}
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // /loki/api/v1/series
 // ────────────────────────────────────────────────────────────────────────────
@@ -795,6 +861,44 @@ func TestIndexVolumeWithQuery(t *testing.T) {
 	}
 	if countStr, ok := second.Value[1].(string); !ok || countStr != "1" {
 		t.Errorf("second entry count = %v, want \"1\"", second.Value[1])
+	}
+}
+
+func TestIndexVolumeSynthesizesServiceNameFromFallbackFields(t *testing.T) {
+	vl := &mockVL{
+		queryLogsRecs: []vlogs.Record{
+			{"_time": "2024-01-15T12:00:00Z", "_msg": "r1", "container": "frontend"},
+			{"_time": "2024-01-15T12:00:01Z", "_msg": "r2", "container": "frontend"},
+			{"_time": "2024-01-15T12:00:02Z", "_msg": "r3", "app": "backend"},
+		},
+	}
+	addr, cleanup := newTestServer(t, buildHandler(newDeps(vl)))
+	defer cleanup()
+
+	resp, err := http.Get(addr +
+		`/loki/api/v1/index/volume?query={service_name=~".+"}&start=1705320000&end=1705323600`)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer closeRespBody(t, resp)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	var body loki.IndexVolumeResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if len(body.Data.Result) != 2 {
+		t.Fatalf("expected 2 result entries, got %d", len(body.Data.Result))
+	}
+	if got := body.Data.Result[0].Metric["service_name"]; got != "frontend" {
+		t.Fatalf("first entry service_name = %q, want frontend", got)
+	}
+	if got := body.Data.Result[1].Metric["service_name"]; got != "backend" {
+		t.Fatalf("second entry service_name = %q, want backend", got)
 	}
 }
 

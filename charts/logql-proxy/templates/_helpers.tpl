@@ -109,6 +109,7 @@ limits:
   maxQueueDepth: {{ .Values.proxy.limits.maxQueueDepth }}
   maxResponseBodyBytes: {{ .Values.proxy.limits.maxResponseBodyBytes | int }}
   maxStreamsPerResponse: {{ .Values.proxy.limits.maxStreamsPerResponse }}
+  aggregationScanLimit: {{ .Values.proxy.limits.aggregationScanLimit }}
   maxMemoryMB: {{ .Values.proxy.limits.maxMemoryMB }}
   maxQueryRangeHours: {{ .Values.proxy.limits.maxQueryRangeHours }}
   maxLimit: {{ .Values.proxy.limits.maxLimit }}
@@ -120,6 +121,14 @@ labels:
     {{- toYaml .Values.proxy.labels.knownLabels | nindent 4 }}
   {{- else }}
   knownLabels: []
+  {{- end }}
+  {{- if .Values.proxy.labels.serviceNameFallbackFields }}
+  serviceNameFallbackFields:
+    {{- toYaml .Values.proxy.labels.serviceNameFallbackFields | nindent 4 }}
+  {{- end }}
+  {{- if .Values.proxy.labels.labelRemap }}
+  labelRemap:
+    {{- toYaml .Values.proxy.labels.labelRemap | nindent 4 }}
   {{- end }}
   metadataCacheTTL: {{ .Values.proxy.labels.metadataCacheTTL | quote }}
   metadataCacheSize: {{ .Values.proxy.labels.metadataCacheSize }}

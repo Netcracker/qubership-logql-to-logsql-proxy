@@ -123,6 +123,35 @@ func TestQueryInstantUsesOneSecondWindow(t *testing.T) {
 	}
 }
 
+func TestQueryRangeEmptyContainsFilterIsNoop(t *testing.T) {
+	var got vlogs.LogQueryRequest
+	deps := testDeps(&stubVL{
+		queryLogsFn: func(_ context.Context, req vlogs.LogQueryRequest, fn func(vlogs.Record) error) error {
+			got = req
+			return fn(vlogs.Record{
+				"_time":     "2024-01-15T12:00:00Z",
+				"_msg":      "log line",
+				"container": "kindnet-cni",
+			})
+		},
+	})
+
+	ctx := newCtx("/loki/api/v1/query_range?query=%7Bcontainer%3D%22kindnet-cni%22%7D+%7C%3D+%60%60&start=1705320000&end=1705323600")
+	deps.QueryRange(ctx)
+
+	if ctx.Response.StatusCode() != fasthttp.StatusOK {
+		t.Fatalf("status = %d, want 200 body=%s", ctx.Response.StatusCode(), ctx.Response.Body())
+	}
+	if got.Query != `container:="kindnet-cni"` {
+		t.Fatalf("translated query = %q, want %q", got.Query, `container:="kindnet-cni"`)
+	}
+
+	body := decodeBody[loki.StreamsResponse](t, ctx)
+	if len(body.Data.Result) != 1 {
+		t.Fatalf("stream count = %d, want 1", len(body.Data.Result))
+	}
+}
+
 func TestLabelsUsesParsedTimeRangeAndCachesSuccess(t *testing.T) {
 	start := time.Unix(1705320000, 0).UTC()
 	end := time.Unix(1705323600, 0).UTC()
@@ -250,6 +279,30 @@ func TestDetectedFieldsUsesBestEffortFilter(t *testing.T) {
 	}
 }
 
+func TestDetectedFieldsIgnoresPipelineStagesForScoping(t *testing.T) {
+	var gotFilter string
+	deps := testDeps(&stubVL{
+		fieldNamesFn: func(_ context.Context, req vlogs.FieldNamesRequest) ([]string, error) {
+			gotFilter = req.Query
+			return []string{"container", "namespace"}, nil
+		},
+	})
+	deps.Cfg.Labels.ServiceNameFallbackFields = []string{"service_name", "container"}
+
+	ctx := newCtx(`/loki/api/v1/detected_fields?query={service_name="qubership-log-generator"} | json | logfmt | drop __error__, __error_details__&start=1705320000&end=1705323600`)
+	deps.DetectedFields(ctx)
+
+	if ctx.Response.StatusCode() != fasthttp.StatusOK {
+		t.Fatalf("status = %d, want 200 body=%s", ctx.Response.StatusCode(), ctx.Response.Body())
+	}
+	if strings.Contains(gotFilter, "unpack_logfmt") {
+		t.Fatalf("filter = %q, did not expect pipeline terms", gotFilter)
+	}
+	if !strings.Contains(gotFilter, `container:="qubership-log-generator"`) {
+		t.Fatalf("filter = %q, expected selector-based scoping", gotFilter)
+	}
+}
+
 func TestDetectedFieldsErrorReturnsBadGateway(t *testing.T) {
 	deps := testDeps(&stubVL{
 		fieldNamesFn: func(_ context.Context, req vlogs.FieldNamesRequest) ([]string, error) {
@@ -278,6 +331,12 @@ func TestHelpersCoverFallbackAndParsing(t *testing.T) {
 	}
 	if got := bestEffortLogsQLFilter(`not logql`, translator.Options{}); got != "*" {
 		t.Errorf("invalid filter = %q, want *", got)
+	}
+	if got := selectorOnlyLogsQLFilter(`{app="api"} | json | logfmt`, translator.Options{}); got != `app:="api"` {
+		t.Errorf("selectorOnlyLogsQLFilter() = %q, want %q", got, `app:="api"`)
+	}
+	if got := selectorOnlyLogsQLFilter(`not logql`, translator.Options{}); got != "*" {
+		t.Errorf("selectorOnlyLogsQLFilter(invalid) = %q, want *", got)
 	}
 	if got := extractStreamSelector(`sum(rate({app="api"}[5m]))`); got != `{app="api"}` {
 		t.Errorf("extractStreamSelector() = %q", got)
@@ -411,6 +470,43 @@ func TestLabelValuesErrorIsNotCached(t *testing.T) {
 	}
 }
 
+func TestDetectedFieldValuesUsesRemapAndScopedQuery(t *testing.T) {
+	start := time.Unix(1705320000, 0).UTC()
+	end := time.Unix(1705323600, 0).UTC()
+
+	var got vlogs.FieldValuesRequest
+	deps := testDeps(&stubVL{
+		fieldValuesFn: func(_ context.Context, req vlogs.FieldValuesRequest) ([]string, error) {
+			got = req
+			return []string{"error", "warn"}, nil
+		},
+	})
+	deps.Cfg.Labels.LabelRemap = map[string]string{"detected_level": "level"}
+	deps.Cfg.Labels.ServiceNameFallbackFields = []string{"service_name", "app", "container"}
+
+	ctx := newCtx(`/loki/api/v1/detected_field/detected_level/values?start=1705320000&end=1705323600&limit=1000&query={service_name="vmalert"} | json | logfmt | drop __error__, __error_details__`)
+	ctx.SetUserValue("name", "detected_level")
+	deps.DetectedFieldValues(ctx)
+
+	if ctx.Response.StatusCode() != fasthttp.StatusOK {
+		t.Fatalf("status = %d, want 200 body=%s", ctx.Response.StatusCode(), ctx.Response.Body())
+	}
+	if got.FieldName != "level" {
+		t.Fatalf("FieldName = %q, want level", got.FieldName)
+	}
+	if got.Query == "*" {
+		t.Fatalf("Query = %q, want scoped filter", got.Query)
+	}
+	if !got.Start.Equal(start) || !got.End.Equal(end) {
+		t.Errorf("range = [%v, %v], want [%v, %v]", got.Start, got.End, start, end)
+	}
+
+	body := decodeBody[loki.LabelValuesResponse](t, ctx)
+	if len(body.Data) != 2 || body.Data[0] != "error" {
+		t.Errorf("unexpected body: %+v", body.Data)
+	}
+}
+
 func TestLabelValuesAndSeriesHelpers(t *testing.T) {
 	deps := testDeps(&stubVL{})
 
@@ -537,6 +633,137 @@ func TestHandleMetricQueryAndParseRecordTime(t *testing.T) {
 	}
 	if got := parseRecordTime("bad"); !got.IsZero() {
 		t.Errorf("parseRecordTime(bad) = %v, want zero", got)
+	}
+}
+
+func TestAggregationQueryDoesNotCapScannedRecordsByMaxLimit(t *testing.T) {
+	var got vlogs.LogQueryRequest
+	deps := testDeps(&stubVL{
+		queryLogsFn: func(_ context.Context, req vlogs.LogQueryRequest, fn func(vlogs.Record) error) error {
+			got = req
+			return fn(vlogs.Record{
+				"_time":          "2024-01-15T12:00:00Z",
+				"_msg":           "m",
+				"detected_level": "error",
+			})
+		},
+	})
+
+	ctx := newCtx(`/loki/api/v1/query_range?query=count+by+(detected_level)+(count_over_time({app="api"}[2s]))&start=1705320000&end=1705323600&step=2`)
+	deps.QueryRange(ctx)
+
+	if ctx.Response.StatusCode() != fasthttp.StatusOK {
+		t.Fatalf("status = %d, want 200 body=%s", ctx.Response.StatusCode(), ctx.Response.Body())
+	}
+	if got.Query != `app:="api"` {
+		t.Fatalf("QueryLogs query = %q, want %q", got.Query, `app:="api"`)
+	}
+	if got.Limit != 0 {
+		t.Fatalf("QueryLogs limit = %d, want 0 (no record cap for aggregation queries)", got.Limit)
+	}
+}
+
+func TestAggregationQueryUsesConfiguredScanLimit(t *testing.T) {
+	var got vlogs.LogQueryRequest
+	deps := testDeps(&stubVL{
+		queryLogsFn: func(_ context.Context, req vlogs.LogQueryRequest, fn func(vlogs.Record) error) error {
+			got = req
+			return fn(vlogs.Record{
+				"_time":          "2024-01-15T12:00:00Z",
+				"_msg":           "m",
+				"detected_level": "error",
+			})
+		},
+	})
+	deps.Cfg.Limits.AggregationScanLimit = 42
+
+	ctx := newCtx(`/loki/api/v1/query_range?query=sum+by+(detected_level)+(count_over_time({app="api"}[2s]))&start=1705320000&end=1705323600&step=2`)
+	deps.QueryRange(ctx)
+
+	if ctx.Response.StatusCode() != fasthttp.StatusOK {
+		t.Fatalf("status = %d, want 200 body=%s", ctx.Response.StatusCode(), ctx.Response.Body())
+	}
+	if got.Limit != 42 {
+		t.Fatalf("QueryLogs limit = %d, want configured 42", got.Limit)
+	}
+
+	body := decodeBody[loki.MatrixResponse](t, ctx)
+	if len(body.Data.Result) != 1 {
+		t.Fatalf("result series = %d, want 1", len(body.Data.Result))
+	}
+}
+
+func TestQueryRangeRateCounter(t *testing.T) {
+	var got vlogs.HitsQueryRequest
+	deps := testDeps(&stubVL{
+		queryHitsFn: func(_ context.Context, req vlogs.HitsQueryRequest) ([]vlogs.HitBucket, error) {
+			got = req
+			return []vlogs.HitBucket{{Timestamp: time.Unix(1705320000, 0).UTC(), Count: 1}}, nil
+		},
+	})
+	deps.Cfg.Labels.LabelRemap = nil
+
+	ctx := newCtx(`/loki/api/v1/query_range?query=rate_counter({detected_level="error"}%20|=%20%60Reconciliation%60%20[2s])&start=1705320000&end=1705323600&step=60`)
+	deps.QueryRange(ctx)
+
+	if ctx.Response.StatusCode() != fasthttp.StatusOK {
+		t.Fatalf("status = %d, want 200 body=%s", ctx.Response.StatusCode(), ctx.Response.Body())
+	}
+	if got.Query != `detected_level:="error" AND _msg:"Reconciliation"` {
+		t.Fatalf("translated query = %q", got.Query)
+	}
+
+	body := decodeBody[loki.MatrixResponse](t, ctx)
+	if body.Data.ResultType != "matrix" || len(body.Data.Result) != 1 {
+		t.Fatalf("unexpected matrix response: %+v", body.Data)
+	}
+}
+
+func TestQueryRangePatternIncludeFilter(t *testing.T) {
+	var got vlogs.LogQueryRequest
+	deps := testDeps(&stubVL{
+		queryLogsFn: func(_ context.Context, req vlogs.LogQueryRequest, fn func(vlogs.Record) error) error {
+			got = req
+			return fn(vlogs.Record{
+				"_time":     "2024-01-15T12:00:00Z",
+				"_msg":      "Reconciliation started",
+				"container": "qubership-log-generator",
+			})
+		},
+	})
+
+	ctx := newCtx(`/loki/api/v1/query_range?query={service_name="qubership-log-generator"}%20|>%20"Reconciliation%20started"&start=1705320000&end=1705323600`)
+	deps.QueryRange(ctx)
+
+	if ctx.Response.StatusCode() != fasthttp.StatusOK {
+		t.Fatalf("status = %d, want 200 body=%s", ctx.Response.StatusCode(), ctx.Response.Body())
+	}
+	if !strings.Contains(got.Query, `_msg:~"Reconciliation[[:space:]]+started"`) {
+		t.Fatalf("translated query = %q", got.Query)
+	}
+}
+
+func TestQueryRangePatternExcludeFilter(t *testing.T) {
+	var got vlogs.LogQueryRequest
+	deps := testDeps(&stubVL{
+		queryLogsFn: func(_ context.Context, req vlogs.LogQueryRequest, fn func(vlogs.Record) error) error {
+			got = req
+			return fn(vlogs.Record{
+				"_time":     "2024-01-15T12:00:00Z",
+				"_msg":      "Other log line",
+				"container": "qubership-log-generator",
+			})
+		},
+	})
+
+	ctx := newCtx(`/loki/api/v1/query_range?query={service_name="qubership-log-generator"}%20!>%20"Reconciliation%20started"&start=1705320000&end=1705323600`)
+	deps.QueryRange(ctx)
+
+	if ctx.Response.StatusCode() != fasthttp.StatusOK {
+		t.Fatalf("status = %d, want 200 body=%s", ctx.Response.StatusCode(), ctx.Response.Body())
+	}
+	if !strings.Contains(got.Query, `NOT _msg:~"Reconciliation[[:space:]]+started"`) {
+		t.Fatalf("translated query = %q", got.Query)
 	}
 }
 

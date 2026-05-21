@@ -16,6 +16,27 @@ import (
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/vlogs"
 )
 
+var defaultSyntheticServiceNameFields = []string{
+	"service_name",
+	"service.name",
+	"service",
+	"labels.app.kubernetes.io/name",
+	"labels.k8s-app",
+	"labels.app",
+	"app",
+	"application",
+	"app_name",
+	"app_kubernetes_io_name",
+	"container",
+	"k8s.container.name",
+	"container.name",
+	"container_name",
+	"k8s_container_name",
+	"job",
+	"k8s.job.name",
+	"k8s_job_name",
+}
+
 // IndexVolume handles GET /loki/api/v1/index/volume and
 // GET /loki/api/v1/index/volume_range.
 //
@@ -68,7 +89,10 @@ func (d *Deps) IndexVolume(ctx *fasthttp.RequestCtx) {
 	}
 
 	// Translate to LogsQL.
-	xlat, err := translator.Translate(ast, translator.Options{LabelRemap: d.Cfg.Labels.LabelRemap})
+	xlat, err := translator.Translate(ast, translator.Options{
+		LabelRemap:                d.Cfg.Labels.LabelRemap,
+		ServiceNameFallbackFields: d.Cfg.Labels.ServiceNameFallbackFields,
+	})
 	if err != nil {
 		writeError(ctx, fasthttp.StatusBadRequest, "bad_data", err.Error())
 		return
@@ -90,7 +114,7 @@ func (d *Deps) IndexVolume(ctx *fasthttp.RequestCtx) {
 		End:   end,
 		Limit: d.Cfg.Limits.MaxLimit,
 	}, func(rec vlogs.Record) error {
-		k, metric := volumeKey(rec, groupLabels)
+		k, metric := volumeKey(rec, groupLabels, d.Cfg.Labels.ServiceNameFallbackFields)
 		if _, exists := counts[k]; !exists {
 			metricsFor[k] = metric
 		}
@@ -176,7 +200,7 @@ func volumeGroupLabels(q parser.Query) []string {
 // volumeKey returns a stable map-key string and the metric label map for a
 // single log record given the set of group label names. Records that share the
 // same values for every group label produce the same key.
-func volumeKey(rec vlogs.Record, groupLabels []string) (string, map[string]string) {
+func volumeKey(rec vlogs.Record, groupLabels []string, serviceNameFallbackFields []string) (string, map[string]string) {
 	if len(groupLabels) == 0 {
 		return "", map[string]string{}
 	}
@@ -184,8 +208,23 @@ func volumeKey(rec vlogs.Record, groupLabels []string) (string, map[string]strin
 	metric := make(map[string]string, len(groupLabels))
 	for _, name := range groupLabels {
 		val := rec[name]
+		if name == "service_name" && val == "" {
+			val = syntheticServiceName(rec, serviceNameFallbackFields)
+		}
 		metric[name] = val
 		parts = append(parts, name, val)
 	}
 	return strings.Join(parts, "\x00"), metric
+}
+
+func syntheticServiceName(rec vlogs.Record, fields []string) string {
+	if len(fields) == 0 {
+		fields = defaultSyntheticServiceNameFields
+	}
+	for _, field := range fields {
+		if val := rec[field]; val != "" {
+			return val
+		}
+	}
+	return ""
 }

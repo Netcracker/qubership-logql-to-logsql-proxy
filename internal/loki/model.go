@@ -42,6 +42,26 @@ type MatrixSeries struct {
 	Values [][]interface{}   `json:"values"`
 }
 
+// VectorResponse is the Loki API JSON body for a successful instant vector
+// query (resultType: "vector").
+type VectorResponse struct {
+	Status string     `json:"status"`
+	Data   VectorData `json:"data"`
+}
+
+// VectorData is the data field of a vector response.
+type VectorData struct {
+	ResultType string         `json:"resultType"`
+	Result     []VectorSample `json:"result"`
+}
+
+// VectorSample is a single sample in a vector result.
+// Value is a [unix_seconds_float, sample_string] pair.
+type VectorSample struct {
+	Metric map[string]string `json:"metric"`
+	Value  []interface{}     `json:"value"`
+}
+
 // LabelsResponse is the Loki API JSON body for GET /loki/api/v1/labels.
 type LabelsResponse struct {
 	Status string   `json:"status"`

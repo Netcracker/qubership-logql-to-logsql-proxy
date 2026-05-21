@@ -522,6 +522,28 @@ func TestQueryHitsSuccessAndErrors(t *testing.T) {
 	}
 }
 
+func TestQueryHitsSupportsTimestampArrayFormat(t *testing.T) {
+	cl := newTestClient(roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusOK, `{"hits":[{"fields":{},"timestamps":["2024-01-15T12:00:00Z","2024-01-15T12:00:02Z"],"values":[2,3],"total":5}]}`), nil
+	}))
+
+	buckets, err := cl.QueryHits(context.Background(), HitsQueryRequest{
+		Query: `app:="api"`,
+		Start: time.Now().Add(-time.Hour),
+		End:   time.Now(),
+		Step:  2 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("QueryHits(): %v", err)
+	}
+	if len(buckets) != 2 {
+		t.Fatalf("bucket count = %d, want 2", len(buckets))
+	}
+	if buckets[0].Count != 2 || buckets[1].Count != 3 {
+		t.Errorf("buckets = %+v", buckets)
+	}
+}
+
 func TestFieldValuesWithLimit(t *testing.T) {
 	var gotQuery string
 	cl := newTestClient(roundTripFunc(func(req *http.Request) (*http.Response, error) {

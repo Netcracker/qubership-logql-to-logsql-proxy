@@ -2,6 +2,7 @@ package translator_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -70,9 +71,122 @@ func TestTranslateRegexMatcher(t *testing.T) {
 	}
 }
 
+func TestTranslateSyntheticServiceNameRegexMatcher(t *testing.T) {
+	r := parseAndTranslate(t, `{service_name=~".+"}`)
+	for _, want := range []string{
+		`service_name:~".+"`,
+		`"service.name":~".+"`,
+		`app:~".+"`,
+		`container:~".+"`,
+	} {
+		if !strings.Contains(r.LogsQL, want) {
+			t.Errorf("LogsQL %q does not contain %q", r.LogsQL, want)
+		}
+	}
+}
+
+func TestTranslateSyntheticServiceNameNotEmptyMatcher(t *testing.T) {
+	r := parseAndTranslate(t, `{service_name!=""}`)
+	for _, want := range []string{
+		`service_name:~".+"`,
+		`"service.name":~".+"`,
+		`app:~".+"`,
+		`container:~".+"`,
+	} {
+		if !strings.Contains(r.LogsQL, want) {
+			t.Errorf("LogsQL %q does not contain %q", r.LogsQL, want)
+		}
+	}
+	if strings.Contains(r.LogsQL, `NOT service_name:=""`) {
+		t.Errorf("LogsQL %q should not use direct NOT empty matcher for synthetic service_name", r.LogsQL)
+	}
+}
+
+func TestTranslateInternalStreamSelector(t *testing.T) {
+	r := parseAndTranslate(t, `{_stream="{container=\"cloud-provider-kind\",namespace=\"kube-system\"}"}`)
+	want := `{container="cloud-provider-kind",namespace="kube-system"}`
+	if r.LogsQL != want {
+		t.Errorf("got %q, want %q", r.LogsQL, want)
+	}
+}
+
+func TestTranslateInternalStreamSelectorNotEmptyIsDropped(t *testing.T) {
+	r := parseAndTranslate(t, `{level="info", _stream!=""}`)
+	want := `level:="info"`
+	if r.LogsQL != want {
+		t.Errorf("got %q, want %q", r.LogsQL, want)
+	}
+}
+
+func TestTranslateInternalStreamIDSelectorNotEmptyIsDropped(t *testing.T) {
+	r := parseAndTranslate(t, `{level="info", _stream_id!=""}`)
+	want := `level:="info"`
+	if r.LogsQL != want {
+		t.Errorf("got %q, want %q", r.LogsQL, want)
+	}
+}
+
+func TestTranslateInternalTimeSelectorNotEmptyIsDropped(t *testing.T) {
+	r := parseAndTranslate(t, `{level="err", _time!=""}`)
+	want := `level:="err"`
+	if r.LogsQL != want {
+		t.Errorf("got %q, want %q", r.LogsQL, want)
+	}
+}
+
+func TestTranslateGrafanaKubernetesLabelAlias(t *testing.T) {
+	r := parseAndTranslate(t, `{service_name="vmagent"} | labels.app.kubernetes.io-technology!=""`)
+	if !strings.Contains(r.LogsQL, `"labels.app.kubernetes.io/technology":=""`) {
+		t.Errorf("LogsQL %q does not contain normalized kubernetes label alias", r.LogsQL)
+	}
+}
+
+func TestTranslateGrafanaKubernetesLabelAliasInAggregationBy(t *testing.T) {
+	r := parseAndTranslate(t, `sum by (labels.app.kubernetes.io-technology) (count_over_time({service_name="vmagent"}[2s]))`)
+	if len(r.AggregateBy) != 1 || r.AggregateBy[0] != "labels.app.kubernetes.io/technology" {
+		t.Errorf("AggregateBy = %v, want [labels.app.kubernetes.io/technology]", r.AggregateBy)
+	}
+}
+
 func TestTranslateLineFilter(t *testing.T) {
 	r := parseAndTranslate(t, `{app="api"} |= "error"`)
 	want := `app:="api" AND _msg:"error"`
+	if r.LogsQL != want {
+		t.Errorf("got %q, want %q", r.LogsQL, want)
+	}
+}
+
+func TestTranslatePatternFilter(t *testing.T) {
+	r := parseAndTranslate(t, `{level="warning"} |> "Reconciliation started"`)
+	for _, want := range []string{
+		`level:="warning"`,
+		`_msg:~"Reconciliation`,
+		`[[:space:]]+`,
+		`started"`,
+	} {
+		if !strings.Contains(r.LogsQL, want) {
+			t.Errorf("LogsQL %q does not contain %q", r.LogsQL, want)
+		}
+	}
+}
+
+func TestTranslateNotPatternFilter(t *testing.T) {
+	r := parseAndTranslate(t, `{level="warning"} !> "Reconciliation started"`)
+	for _, want := range []string{
+		`level:="warning"`,
+		`NOT _msg:~"Reconciliation`,
+		`[[:space:]]+`,
+		`started"`,
+	} {
+		if !strings.Contains(r.LogsQL, want) {
+			t.Errorf("LogsQL %q does not contain %q", r.LogsQL, want)
+		}
+	}
+}
+
+func TestTranslateEmptyLineFilterIsNoop(t *testing.T) {
+	r := parseAndTranslate(t, "{app=`api`} |= ``")
+	want := `app:="api"`
 	if r.LogsQL != want {
 		t.Errorf("got %q, want %q", r.LogsQL, want)
 	}
@@ -235,8 +349,8 @@ func TestTranslateUnsupportedReturnsError(t *testing.T) {
 			t.Errorf("Parse(%q): expected error, got nil", q)
 			continue
 		}
-		var ue *parser.UnsupportedError
-		if !errors.As(err, &ue) {
+		var unsupportedErr *parser.UnsupportedError
+		if !errors.As(err, &unsupportedErr) {
 			t.Errorf("Parse(%q): expected *UnsupportedError, got %T: %v", q, err, err)
 		}
 	}

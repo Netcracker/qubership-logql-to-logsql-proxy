@@ -66,6 +66,7 @@ type LimitsConfig struct {
 	MaxQueueDepth         int   // waiting requests before 429, default: 100
 	MaxResponseBodyBytes  int64 // per-request VL body cap, default: 64 MiB
 	MaxStreamsPerResponse int   // Loki stream accumulation cap, default: 5000
+	AggregationScanLimit  int   // cap for aggregation scan queries; 0 means unlimited
 	MaxMemoryMB           int64 // GOMEMLIMIT target, default: 512
 	MaxQueryRangeHours    int   // reject time ranges wider than this, default: 24
 	MaxLimit              int   // cap on ?limit= param, default: 5000
@@ -77,13 +78,27 @@ type LabelsConfig struct {
 	// KnownLabels is a static allowlist for /labels. Empty = query VL dynamically.
 	KnownLabels []string
 
+	// ServiceNameFallbackFields controls which VictoriaLogs fields are consulted
+	// when Grafana queries the synthetic "service_name" label. The first
+	// non-empty field becomes the synthetic service_name in grouped responses,
+	// and selector matchers on service_name are expanded across this list.
+	ServiceNameFallbackFields []string
+
 	// LabelRemap translates LogQL label names to their VictoriaLogs equivalents
-	// before emitting LogsQL. The default mapping is:
+	// before emitting LogsQL.
+	//
+	// No remapping is enabled by default. This keeps environments that already
+	// store Grafana-compatible labels (for example, a real "detected_level"
+	// field) working without translation surprises.
+	//
+	// For compatibility with older pipelines that only store "level", you can
+	// explicitly enable:
 	//   detected_level → level
-	// (Grafana Logs Drilldown synthesises "detected_level" from log content;
-	// VictoriaLogs stores the equivalent information in the "level" field.)
-	// Override in config to add or replace entries; set to {} to disable all
-	// remapping.
+	//
+	// Example YAML:
+	//   labels:
+	//     labelRemap:
+	//       detected_level: level
 	LabelRemap map[string]string
 
 	MetadataCacheTTL  time.Duration // default: 5m
@@ -138,6 +153,7 @@ type rawLimitsConfig struct {
 	MaxQueueDepth         int   `yaml:"maxQueueDepth"`
 	MaxResponseBodyBytes  int64 `yaml:"maxResponseBodyBytes"`
 	MaxStreamsPerResponse int   `yaml:"maxStreamsPerResponse"`
+	AggregationScanLimit  int   `yaml:"aggregationScanLimit"`
 	MaxMemoryMB           int64 `yaml:"maxMemoryMB"`
 	MaxQueryRangeHours    int   `yaml:"maxQueryRangeHours"`
 	MaxLimit              int   `yaml:"maxLimit"`
@@ -145,10 +161,11 @@ type rawLimitsConfig struct {
 }
 
 type rawLabelsConfig struct {
-	KnownLabels       []string          `yaml:"knownLabels"`
-	LabelRemap        map[string]string `yaml:"labelRemap"`
-	MetadataCacheTTL  string            `yaml:"metadataCacheTTL"`
-	MetadataCacheSize int               `yaml:"metadataCacheSize"`
+	KnownLabels               []string          `yaml:"knownLabels"`
+	ServiceNameFallbackFields []string          `yaml:"serviceNameFallbackFields"`
+	LabelRemap                map[string]string `yaml:"labelRemap"`
+	MetadataCacheTTL          string            `yaml:"metadataCacheTTL"`
+	MetadataCacheSize         int               `yaml:"metadataCacheSize"`
 }
 
 type rawLogConfig struct {
@@ -174,12 +191,30 @@ func defaultRaw() *rawConfig {
 	r.Limits.MaxQueueDepth = 100
 	r.Limits.MaxResponseBodyBytes = 64 * 1024 * 1024 // 64 MiB
 	r.Limits.MaxStreamsPerResponse = 5000
+	r.Limits.AggregationScanLimit = 0
 	r.Limits.MaxMemoryMB = 512
 	r.Limits.MaxQueryRangeHours = 24
 	r.Limits.MaxLimit = 5000
 	r.Limits.DefaultLimit = 1000
-	r.Labels.LabelRemap = map[string]string{
-		"detected_level": "level",
+	r.Labels.ServiceNameFallbackFields = []string{
+		"service_name",
+		"service.name",
+		"service",
+		"labels.app.kubernetes.io/name",
+		"labels.k8s-app",
+		"labels.app",
+		"app",
+		"application",
+		"app_name",
+		"app_kubernetes_io_name",
+		"container",
+		"k8s.container.name",
+		"container.name",
+		"container_name",
+		"k8s_container_name",
+		"job",
+		"k8s.job.name",
+		"k8s_job_name",
 	}
 	r.Labels.MetadataCacheTTL = "5m"
 	r.Labels.MetadataCacheSize = 256
@@ -273,6 +308,7 @@ func applyEnv(r *rawConfig) {
 	envInt("PROXY_LIMITS_MAXQUEUEDEPTH", &r.Limits.MaxQueueDepth)
 	envInt64("PROXY_LIMITS_MAXRESPONSEBODYBYTES", &r.Limits.MaxResponseBodyBytes)
 	envInt("PROXY_LIMITS_MAXSTREAMSPERRESPONSE", &r.Limits.MaxStreamsPerResponse)
+	envInt("PROXY_LIMITS_AGGREGATIONSCANLIMIT", &r.Limits.AggregationScanLimit)
 	envInt64("PROXY_LIMITS_MAXMEMORYMB", &r.Limits.MaxMemoryMB)
 	envInt("PROXY_LIMITS_MAXQUERYRANGEHOURS", &r.Limits.MaxQueryRangeHours)
 	envInt("PROXY_LIMITS_MAXLIMIT", &r.Limits.MaxLimit)
@@ -288,6 +324,16 @@ func applyEnv(r *rawConfig) {
 			}
 		}
 		r.Labels.KnownLabels = labels
+	}
+	if v := os.Getenv("PROXY_LABELS_SERVICENAMEFALLBACKFIELDS"); v != "" {
+		parts := strings.Split(v, ",")
+		fields := parts[:0]
+		for _, p := range parts {
+			if t := strings.TrimSpace(p); t != "" {
+				fields = append(fields, t)
+			}
+		}
+		r.Labels.ServiceNameFallbackFields = fields
 	}
 	envStr("PROXY_LABELS_METADATACACHETTL", &r.Labels.MetadataCacheTTL)
 	envInt("PROXY_LABELS_METADATACACHESIZE", &r.Labels.MetadataCacheSize)
@@ -337,16 +383,18 @@ func convert(r *rawConfig) (*Config, error) {
 			MaxQueueDepth:         r.Limits.MaxQueueDepth,
 			MaxResponseBodyBytes:  r.Limits.MaxResponseBodyBytes,
 			MaxStreamsPerResponse: r.Limits.MaxStreamsPerResponse,
+			AggregationScanLimit:  r.Limits.AggregationScanLimit,
 			MaxMemoryMB:           r.Limits.MaxMemoryMB,
 			MaxQueryRangeHours:    r.Limits.MaxQueryRangeHours,
 			MaxLimit:              r.Limits.MaxLimit,
 			DefaultLimit:          r.Limits.DefaultLimit,
 		},
 		Labels: LabelsConfig{
-			KnownLabels:       r.Labels.KnownLabels,
-			LabelRemap:        r.Labels.LabelRemap,
-			MetadataCacheTTL:  dur(r.Labels.MetadataCacheTTL, "labels.metadataCacheTTL"),
-			MetadataCacheSize: r.Labels.MetadataCacheSize,
+			KnownLabels:               r.Labels.KnownLabels,
+			ServiceNameFallbackFields: r.Labels.ServiceNameFallbackFields,
+			LabelRemap:                r.Labels.LabelRemap,
+			MetadataCacheTTL:          dur(r.Labels.MetadataCacheTTL, "labels.metadataCacheTTL"),
+			MetadataCacheSize:         r.Labels.MetadataCacheSize,
 		},
 		Log: LogConfig{
 			Level:  r.Log.Level,
@@ -389,6 +437,9 @@ func validate(cfg *Config) error {
 	}
 	if cfg.Limits.MaxStreamsPerResponse < 1 {
 		errs = append(errs, errors.New("limits.maxStreamsPerResponse must be >= 1"))
+	}
+	if cfg.Limits.AggregationScanLimit < 0 {
+		errs = append(errs, errors.New("limits.aggregationScanLimit must be >= 0"))
 	}
 	if cfg.Limits.MaxMemoryMB < 1 {
 		errs = append(errs, errors.New("limits.maxMemoryMB must be >= 1"))

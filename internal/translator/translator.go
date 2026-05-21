@@ -27,11 +27,33 @@ package translator
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/parser"
 )
+
+var defaultServiceNameFallbackFields = []string{
+	"service_name",
+	"service.name",
+	"service",
+	"labels.app.kubernetes.io/name",
+	"labels.k8s-app",
+	"labels.app",
+	"app",
+	"application",
+	"app_name",
+	"app_kubernetes_io_name",
+	"container",
+	"k8s.container.name",
+	"container.name",
+	"container_name",
+	"k8s_container_name",
+	"job",
+	"k8s.job.name",
+	"k8s_job_name",
+}
 
 // ────────────────────────────────────────────────────────────────────────────
 // Public types
@@ -79,6 +101,10 @@ type Options struct {
 	// "by (...)" grouping clause before emitting the LogsQL string.
 	// A nil map disables all remapping.
 	LabelRemap map[string]string
+
+	// ServiceNameFallbackFields controls which fields should be consulted when
+	// Grafana uses the synthetic service_name label.
+	ServiceNameFallbackFields []string
 }
 
 // TranslationError is returned when an AST node cannot be expressed in LogsQL.
@@ -155,13 +181,17 @@ func translateLogQuery(lq *parser.LogQuery, opts Options) (logsql string, hasJSO
 		if terr != nil {
 			return "", false, terr
 		}
-		terms = append(terms, t)
+		if t != "" {
+			terms = append(terms, t)
+		}
 	}
 
 	for _, stage := range lq.Pipeline {
 		switch s := stage.(type) {
 		case *parser.LineFilter:
-			terms = append(terms, translateLineFilter(s))
+			if term := translateLineFilter(s); term != "" {
+				terms = append(terms, term)
+			}
 		case *parser.LabelFilter:
 			t, terr := translateLabelFilter(s, opts)
 			if terr != nil {
@@ -192,7 +222,14 @@ func translateLogQuery(lq *parser.LogQuery, opts Options) (logsql string, hasJSO
 }
 
 func translateMatcher(m parser.LabelMatcher, opts Options) (string, error) {
-	f := quoteLabelName(remapName(m.Name, opts.LabelRemap))
+	name := remapName(m.Name, opts.LabelRemap)
+	if name == "service_name" {
+		return translateSyntheticServiceNameMatcher(m, opts.ServiceNameFallbackFields)
+	}
+	if vlInternalFields[name] {
+		return translateInternalMatcher(name, m)
+	}
+	f := quoteLabelName(name)
 	switch m.Type {
 	case parser.Eq:
 		return fmt.Sprintf(`%s:="%s"`, f, escapeLit(m.Value)), nil
@@ -207,6 +244,97 @@ func translateMatcher(m parser.LabelMatcher, opts Options) (string, error) {
 	}
 }
 
+func translateSyntheticServiceNameMatcher(m parser.LabelMatcher, fields []string) (string, error) {
+	if len(fields) == 0 {
+		fields = defaultServiceNameFallbackFields
+	}
+	if len(fields) == 0 {
+		return "", &TranslationError{Msg: "service_name fallback fields are not configured"}
+	}
+
+	parts := make([]string, 0, len(fields))
+	for _, field := range fields {
+		qf := quoteLabelName(field)
+		switch m.Type {
+		case parser.Eq:
+			parts = append(parts, fmt.Sprintf(`%s:="%s"`, qf, escapeLit(m.Value)))
+		case parser.Neq:
+			if m.Value == "" {
+				parts = append(parts, fmt.Sprintf(`%s:~".+"`, qf))
+			} else {
+				parts = append(parts, fmt.Sprintf(`NOT %s:="%s"`, qf, escapeLit(m.Value)))
+			}
+		case parser.Re:
+			parts = append(parts, fmt.Sprintf(`%s:~"%s"`, qf, escapeRe(m.Value)))
+		case parser.Nre:
+			parts = append(parts, fmt.Sprintf(`NOT %s:~"%s"`, qf, escapeRe(m.Value)))
+		default:
+			return "", &TranslationError{Msg: fmt.Sprintf("unknown match type %d", m.Type)}
+		}
+	}
+
+	joiner := " OR "
+	if m.Type == parser.Neq && m.Value != "" {
+		joiner = " AND "
+	}
+	if m.Type == parser.Nre {
+		joiner = " AND "
+	}
+	return "(" + strings.Join(parts, joiner) + ")", nil
+}
+
+func translateInternalMatcher(name string, m parser.LabelMatcher) (string, error) {
+	switch name {
+	case "_stream":
+		return translateStreamSelectorMatcher(m)
+	case "_stream_id":
+		return translateStreamIDSelectorMatcher(m)
+	case "_time":
+		return translateTimeSelectorMatcher(m)
+	default:
+		return "", &TranslationError{Msg: fmt.Sprintf("unsupported internal field %q", name)}
+	}
+}
+
+func translateStreamSelectorMatcher(m parser.LabelMatcher) (string, error) {
+	if m.Type != parser.Eq && m.Type != parser.Neq {
+		return "", &TranslationError{Msg: "_stream supports only = and !="}
+	}
+	// Grafana Drilldown frequently appends `_stream != ""` to exclude empty
+	// values. For VictoriaLogs this is effectively a no-op and must be dropped.
+	if m.Type == parser.Neq && m.Value == "" {
+		return "", nil
+	}
+	if !strings.HasPrefix(m.Value, "{") || !strings.HasSuffix(m.Value, "}") {
+		return "", &TranslationError{Msg: `_stream value must be a VictoriaLogs stream selector like {label="value"}`}
+	}
+	if m.Type == parser.Neq {
+		return "NOT " + m.Value, nil
+	}
+	return m.Value, nil
+}
+
+func translateStreamIDSelectorMatcher(m parser.LabelMatcher) (string, error) {
+	if m.Type != parser.Eq && m.Type != parser.Neq {
+		return "", &TranslationError{Msg: "_stream_id supports only = and !="}
+	}
+	if m.Type == parser.Neq && m.Value == "" {
+		return "", nil
+	}
+	return "", &TranslationError{Msg: "_stream_id stream selector is not supported"}
+}
+
+func translateTimeSelectorMatcher(m parser.LabelMatcher) (string, error) {
+	if m.Type != parser.Eq && m.Type != parser.Neq {
+		return "", &TranslationError{Msg: "_time supports only = and !="}
+	}
+	// Request start/end already constrain time, so `_time != ""` adds no value.
+	if m.Type == parser.Neq && m.Value == "" {
+		return "", nil
+	}
+	return "", &TranslationError{Msg: "_time stream selector is not supported"}
+}
+
 // vlInternalFields lists VictoriaLogs field names that use non-standard filter
 // syntax and therefore cannot be expressed with the :=/:~ operators. Label
 // filter stages that target these fields are silently dropped.
@@ -217,6 +345,7 @@ func translateMatcher(m parser.LabelMatcher, opts Options) (string, error) {
 var vlInternalFields = map[string]bool{
 	"_stream":    true,
 	"_stream_id": true,
+	"_time":      true,
 }
 
 func translateLabelFilter(f *parser.LabelFilter, opts Options) (string, error) {
@@ -242,6 +371,12 @@ func translateLabelFilter(f *parser.LabelFilter, opts Options) (string, error) {
 func translateLineFilter(f *parser.LineFilter) string {
 	switch f.Op {
 	case parser.Contains:
+		// In LogQL an empty contains filter (`|= ""` or `|= ```) matches every
+		// line, so it must behave as a no-op. Emitting `_msg:""` would
+		// over-constrain the VictoriaLogs query and can hide valid records.
+		if f.Value == "" {
+			return ""
+		}
 		// LogsQL uses _msg:"text" for substring/word search (no := needed)
 		return fmt.Sprintf(`_msg:"%s"`, escapeLit(f.Value))
 	case parser.NotContains:
@@ -250,10 +385,60 @@ func translateLineFilter(f *parser.LineFilter) string {
 		return fmt.Sprintf(`_msg:~"%s"`, escapeRe(f.Value))
 	case parser.NotRegex:
 		return fmt.Sprintf(`NOT _msg:~"%s"`, escapeRe(f.Value))
+	case parser.Pattern:
+		return fmt.Sprintf(`_msg:~"%s"`, escapeRe(logQLPatternToRegex(f.Value)))
+	case parser.NotPattern:
+		return fmt.Sprintf(`NOT _msg:~"%s"`, escapeRe(logQLPatternToRegex(f.Value)))
 	default:
 		// Defensive fallback; the parser never produces an unknown FilterOp.
 		return fmt.Sprintf(`_msg:"%s"`, escapeLit(f.Value))
 	}
+}
+
+var patternPlaceholders = map[string]string{
+	"<_>":        ".*",
+	"<N>":        "[0-9]+",
+	"<IP4>":      "(?:[0-9]{1,3}\\.){3}[0-9]{1,3}",
+	"<UUID>":     "[0-9a-fA-F-]{36}",
+	"<DATE>":     "[0-9]{4}-[0-9]{2}-[0-9]{2}",
+	"<TIME>":     "[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]+)?",
+	"<DATETIME>": "[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9:+\\-.Z]+",
+}
+
+func logQLPatternToRegex(pattern string) string {
+	var sb strings.Builder
+	for i := 0; i < len(pattern); {
+		if pattern[i] == ' ' || pattern[i] == '\t' || pattern[i] == '\n' || pattern[i] == '\r' {
+			for i < len(pattern) {
+				switch pattern[i] {
+				case ' ', '\t', '\n', '\r':
+					i++
+				default:
+					sb.WriteString(`[[:space:]]+`)
+					goto next
+				}
+			}
+			sb.WriteString(`[[:space:]]+`)
+			break
+		}
+		if pattern[i] == '<' {
+			if j := strings.IndexByte(pattern[i:], '>'); j >= 0 {
+				token := pattern[i : i+j+1]
+				if repl, ok := patternPlaceholders[token]; ok {
+					sb.WriteString(repl)
+					i += j + 1
+					continue
+				}
+				sb.WriteString(".*")
+				i += j + 1
+				continue
+			}
+		}
+		sb.WriteString(regexp.QuoteMeta(pattern[i : i+1]))
+		i++
+	next:
+	}
+	return sb.String()
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -264,6 +449,7 @@ func translateLineFilter(f *parser.LineFilter) string {
 // looking it up in the provided map. Returns name unchanged when the map is
 // nil or contains no entry for name.
 func remapName(name string, remap map[string]string) string {
+	name = normalizeGrafanaLabelAlias(name)
 	if mapped, ok := remap[name]; ok {
 		return mapped
 	}
@@ -273,7 +459,7 @@ func remapName(name string, remap map[string]string) string {
 // remapNames applies remapName to each element of a slice, returning a new
 // slice. Returns the original slice unchanged when remap is nil or empty.
 func remapNames(names []string, remap map[string]string) []string {
-	if len(remap) == 0 || len(names) == 0 {
+	if len(names) == 0 {
 		return names
 	}
 	out := make([]string, len(names))
@@ -281,6 +467,14 @@ func remapNames(names []string, remap map[string]string) []string {
 		out[i] = remapName(n, remap)
 	}
 	return out
+}
+
+func normalizeGrafanaLabelAlias(name string) string {
+	const k8sAppPrefix = "labels.app.kubernetes.io-"
+	if strings.HasPrefix(name, k8sAppPrefix) {
+		return "labels.app.kubernetes.io/" + strings.TrimPrefix(name, k8sAppPrefix)
+	}
+	return name
 }
 
 // quoteLabelName returns a LogsQL-safe representation of a field name.

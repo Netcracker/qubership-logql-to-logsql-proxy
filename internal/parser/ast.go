@@ -4,7 +4,7 @@
 // Supported constructs:
 //   - Stream selectors: {label="val", other!="x", re=~"pat.*", nre!~"bad.*"}
 //   - Empty selector: {}
-//   - Line filters:  |= "text"  |~ "re"  != "text"  !~ "re"
+//   - Line filters:  |= "text"  |~ "re"  |> "pattern"  != "text"  !~ "re"
 //   - JSON parser stage: | json
 //   - Logfmt parser stage: | logfmt
 //   - Metric wrappers: count_over_time({...}[5m])  rate({...}[5m])
@@ -119,6 +119,8 @@ const (
 	NotContains                 // != "text"
 	Regex                       // |~ "re"
 	NotRegex                    // !~ "re"
+	Pattern                     // |> "pattern"
+	NotPattern                  // !> "pattern"
 )
 
 // LineFilter filters log lines by content or regex.

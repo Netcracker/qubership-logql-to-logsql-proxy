@@ -153,17 +153,40 @@ func (c *Client) QueryHits(ctx context.Context, req HitsQueryRequest) ([]HitBuck
 
 	buckets := make([]HitBucket, 0, len(vlResp.Hits))
 	for _, e := range vlResp.Hits {
-		ts, err := time.Parse(time.RFC3339, e.Timestamp)
-		if err != nil {
-			// Try RFC3339Nano as a fallback
-			ts, err = time.Parse(time.RFC3339Nano, e.Timestamp)
-			if err != nil {
-				return nil, fmt.Errorf("parse hit timestamp %q: %w", e.Timestamp, err)
+		switch {
+		case len(e.Timestamps) > 0 || len(e.Values) > 0:
+			if len(e.Timestamps) != len(e.Values) {
+				return nil, fmt.Errorf("invalid QueryHits response: timestamps len %d != values len %d",
+					len(e.Timestamps), len(e.Values))
 			}
+			for i, tsRaw := range e.Timestamps {
+				ts, err := parseHitTimestamp(tsRaw)
+				if err != nil {
+					return nil, err
+				}
+				buckets = append(buckets, HitBucket{Timestamp: ts, Count: e.Values[i]})
+			}
+		default:
+			ts, err := parseHitTimestamp(e.Timestamp)
+			if err != nil {
+				return nil, err
+			}
+			buckets = append(buckets, HitBucket{Timestamp: ts, Count: e.Hits})
 		}
-		buckets = append(buckets, HitBucket{Timestamp: ts, Count: e.Hits})
 	}
 	return buckets, nil
+}
+
+func parseHitTimestamp(raw string) (time.Time, error) {
+	ts, err := time.Parse(time.RFC3339, raw)
+	if err == nil {
+		return ts, nil
+	}
+	ts, err = time.Parse(time.RFC3339Nano, raw)
+	if err == nil {
+		return ts, nil
+	}
+	return time.Time{}, fmt.Errorf("parse hit timestamp %q: %w", raw, err)
 }
 
 // FieldNames calls GET /select/logsql/field_names and returns the list of

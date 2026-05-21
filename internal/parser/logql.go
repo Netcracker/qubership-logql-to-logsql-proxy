@@ -13,25 +13,27 @@ import (
 type tokenType int
 
 const (
-	tokILLEGAL  tokenType = iota
-	tokEOF                // end of input
-	tokLBRACE             // {
-	tokRBRACE             // }
-	tokLPAREN             // (
-	tokRPAREN             // )
-	tokLBRACKET           // [
-	tokRBRACKET           // ]
-	tokCOMMA              // ,
-	tokIDENT              // identifier / keyword
-	tokSTRING             // "double-quoted string" (value is the unquoted content)
-	tokEQ                 // =
-	tokNEQ                // !=
-	tokRE                 // =~
-	tokNRE                // !~
-	tokPIPE_EQ            // |=  (line-filter contains)
-	tokPIPE_RE            // |~  (line-filter regex)
-	tokPIPE               // |
-	tokDURATION           // e.g. 5m, 1h30m
+	tokILLEGAL       tokenType = iota
+	tokEOF                     // end of input
+	tokLBRACE                  // {
+	tokRBRACE                  // }
+	tokLPAREN                  // (
+	tokRPAREN                  // )
+	tokLBRACKET                // [
+	tokRBRACKET                // ]
+	tokCOMMA                   // ,
+	tokIDENT                   // identifier / keyword
+	tokSTRING                  // "double-quoted string" (value is the unquoted content)
+	tokEQ                      // =
+	tokNEQ                     // !=
+	tokRE                      // =~
+	tokNRE                     // !~
+	tokPIPE_EQ                 // |=  (line-filter contains)
+	tokPIPE_RE                 // |~  (line-filter regex)
+	tokPIPE_PATTERN            // |>  (pattern filter)
+	tokNPIPE_PATTERN           // !>  (negated pattern filter)
+	tokPIPE                    // |
+	tokDURATION                // e.g. 5m, 1h30m
 )
 
 type token struct {
@@ -110,6 +112,9 @@ func (l *lexer) next() token {
 		case '~':
 			l.pos += 2
 			return token{tokNRE, "!~", pos}
+		case '>':
+			l.pos += 2
+			return token{tokNPIPE_PATTERN, "!>", pos}
 		}
 		l.pos++
 		return token{tokILLEGAL, "!", pos}
@@ -122,6 +127,9 @@ func (l *lexer) next() token {
 		case '~':
 			l.pos += 2
 			return token{tokPIPE_RE, "|~", pos}
+		case '>':
+			l.pos += 2
+			return token{tokPIPE_PATTERN, "|>", pos}
 		}
 		l.pos++
 		return token{tokPIPE, "|", pos}
@@ -332,7 +340,7 @@ func (p *parser) parseQuery() (Query, error) {
 	}
 	return nil, &ParseError{
 		Pos: tok.pos,
-		Msg: fmt.Sprintf("expected { or metric function (count_over_time, rate), got %q", tok.val),
+		Msg: fmt.Sprintf("expected { or metric function (count_over_time, rate, rate_counter), got %q", tok.val),
 	}
 }
 
@@ -348,6 +356,8 @@ func (p *parser) parseMetricQuery() (*MetricQuery, error) {
 	case "count_over_time":
 		fn = CountOverTime
 	case "rate":
+		fn = Rate
+	case "rate_counter":
 		fn = Rate
 	default:
 		return nil, &UnsupportedError{Pos: funcTok.pos, Construct: funcTok.val}
@@ -373,6 +383,7 @@ func (p *parser) parseMetricQuery() (*MetricQuery, error) {
 			Msg: fmt.Sprintf("expected duration (e.g. 5m), got %q", durTok.val),
 		}
 	}
+
 	dur, err := time.ParseDuration(durTok.val)
 	if err != nil {
 		return nil, &ParseError{
@@ -504,6 +515,8 @@ func (p *parser) parseLabelMatcher() (LabelMatcher, error) {
 //	               | "!=" STRING       (not-contains)
 //	               | "|~" STRING       (regex)
 //	               | "!~" STRING       (not-regex)
+//	               | "|>" STRING       (pattern match)
+//	               | "!>" STRING       (negated pattern match)
 //	               | "|" "json"
 //	               | "|" IDENT         (unsupported → UnsupportedError)
 //
@@ -534,6 +547,22 @@ func (p *parser) parsePipeline() ([]PipelineStage, error) {
 				return nil, err
 			}
 			stages = append(stages, &LineFilter{Op: Regex, Value: v})
+
+		case tokPIPE_PATTERN:
+			p.consume()
+			v, err := p.expectString(tok)
+			if err != nil {
+				return nil, err
+			}
+			stages = append(stages, &LineFilter{Op: Pattern, Value: v})
+
+		case tokNPIPE_PATTERN:
+			p.consume()
+			v, err := p.expectString(tok)
+			if err != nil {
+				return nil, err
+			}
+			stages = append(stages, &LineFilter{Op: NotPattern, Value: v})
 
 		case tokNEQ:
 			p.consume()
@@ -613,7 +642,7 @@ func (p *parser) parsePipeline() ([]PipelineStage, error) {
 		default:
 			return nil, &ParseError{
 				Pos: tok.pos,
-				Msg: fmt.Sprintf("unexpected token %q in pipeline (expected |=, !=, |~, !~, | json/logfmt/drop/keep, or end of query)", tok.val),
+				Msg: fmt.Sprintf("unexpected token %q in pipeline (expected |=, !=, |~, !~, |>, !>, | json/logfmt/drop/keep, or end of query)", tok.val),
 			}
 		}
 	}
@@ -757,7 +786,7 @@ func isAggFunc(name string) bool {
 }
 
 func isMetricFunc(name string) bool {
-	return name == "count_over_time" || name == "rate"
+	return name == "count_over_time" || name == "rate" || name == "rate_counter"
 }
 
 func tokenName(tt tokenType) string {

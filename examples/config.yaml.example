@@ -29,6 +29,7 @@ limits:
   maxQueueDepth: 100
   maxResponseBodyBytes: 67108864  # 64 MiB
   maxStreamsPerResponse: 5000
+  aggregationScanLimit: 0         # 0 = unlimited for aggregation queries
   maxMemoryMB: 512
   maxQueryRangeHours: 24
   maxLimit: 5000
@@ -37,6 +38,20 @@ limits:
 labels:
   # Leave empty to discover dynamically from VL /field_names
   knownLabels: []
+
+  # Optional fallback fields used to synthesize Grafana's service_name label
+  # when the logs do not store service_name directly.
+  # serviceNameFallbackFields:
+  #   - service_name
+  #   - service.name
+  #   - app
+  #   - container
+
+  # Optional label translation for legacy pipelines that do not store
+  # Grafana-compatible labels directly.
+  # labelRemap:
+  #   detected_level: level
+
   metadataCacheTTL: 5m
   metadataCacheSize: 256
 

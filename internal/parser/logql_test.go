@@ -132,6 +132,28 @@ func TestParseWithRegexFilter(t *testing.T) {
 	}
 }
 
+func TestParseWithPatternFilter(t *testing.T) {
+	lq := asLogQuery(t, mustParse(t, `{level="warning"} |> "Reconciliation started"`))
+	lf, ok := lq.Pipeline[0].(*parser.LineFilter)
+	if !ok {
+		t.Fatalf("expected *LineFilter, got %T", lq.Pipeline[0])
+	}
+	if lf.Op != parser.Pattern || lf.Value != "Reconciliation started" {
+		t.Errorf("got LineFilter %+v, want {Op:Pattern Value:Reconciliation started}", lf)
+	}
+}
+
+func TestParseWithNotPatternFilter(t *testing.T) {
+	lq := asLogQuery(t, mustParse(t, `{level="warning"} !> "Reconciliation started"`))
+	lf, ok := lq.Pipeline[0].(*parser.LineFilter)
+	if !ok {
+		t.Fatalf("expected *LineFilter, got %T", lq.Pipeline[0])
+	}
+	if lf.Op != parser.NotPattern || lf.Value != "Reconciliation started" {
+		t.Errorf("got LineFilter %+v, want {Op:NotPattern Value:Reconciliation started}", lf)
+	}
+}
+
 func TestParseWithNotRegexFilter(t *testing.T) {
 	lq := asLogQuery(t, mustParse(t, `{app="api"} !~ "err.*"`))
 	lf, ok := lq.Pipeline[0].(*parser.LineFilter)
@@ -178,6 +200,16 @@ func TestParseCountOverTime(t *testing.T) {
 
 func TestParseRate(t *testing.T) {
 	mq := asMetricQuery(t, mustParse(t, `rate({app="api"}[1h])`))
+	if mq.Function != parser.Rate {
+		t.Errorf("expected Rate, got %d", mq.Function)
+	}
+	if mq.Range != time.Hour {
+		t.Errorf("expected 1h range, got %v", mq.Range)
+	}
+}
+
+func TestParseRateCounter(t *testing.T) {
+	mq := asMetricQuery(t, mustParse(t, `rate_counter({app="api"}[1h])`))
 	if mq.Function != parser.Rate {
 		t.Errorf("expected Rate, got %d", mq.Function)
 	}
@@ -328,12 +360,12 @@ func TestParseUnsupportedConstruct(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for unsupported construct, got nil")
 	}
-	var ue *parser.UnsupportedError
-	if !errors.As(err, &ue) {
+	var unsupportedErr *parser.UnsupportedError
+	if !errors.As(err, &unsupportedErr) {
 		t.Errorf("expected *UnsupportedError, got %T: %v", err, err)
 	}
-	if ue.Construct != "| line_format" {
-		t.Errorf("expected construct %q, got %q", "| line_format", ue.Construct)
+	if unsupportedErr.Construct != "| line_format" {
+		t.Errorf("expected construct %q, got %q", "| line_format", unsupportedErr.Construct)
 	}
 }
 

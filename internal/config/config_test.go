@@ -75,6 +75,12 @@ func TestLoadAppliesDefaultsFileEnvAndPasswordFile(t *testing.T) {
 	if got := cfg.Labels.KnownLabels; len(got) != 3 || got[0] != "app" || got[1] != "team" || got[2] != "env" {
 		t.Errorf("KnownLabels = %v, want [app team env]", got)
 	}
+	if len(cfg.Labels.ServiceNameFallbackFields) == 0 {
+		t.Errorf("ServiceNameFallbackFields should be populated by default")
+	}
+	if len(cfg.Labels.LabelRemap) != 0 {
+		t.Errorf("LabelRemap = %v, want empty by default", cfg.Labels.LabelRemap)
+	}
 	if cfg.Log.Level != "debug" {
 		t.Errorf("Log.Level = %q, want %q", cfg.Log.Level, "debug")
 	}
@@ -83,6 +89,99 @@ func TestLoadAppliesDefaultsFileEnvAndPasswordFile(t *testing.T) {
 	}
 	if cfg.Limits.MaxStreamsPerResponse != 5000 {
 		t.Errorf("MaxStreamsPerResponse = %d, want default 5000", cfg.Limits.MaxStreamsPerResponse)
+	}
+	if cfg.Limits.AggregationScanLimit != 0 {
+		t.Errorf("AggregationScanLimit = %d, want default 0", cfg.Limits.AggregationScanLimit)
+	}
+}
+
+func TestLoadAllowsExplicitLabelRemapFromConfig(t *testing.T) {
+	cfgFile, err := os.CreateTemp(t.TempDir(), "config-*.yaml")
+	if err != nil {
+		t.Fatalf("CreateTemp(config): %v", err)
+	}
+	cfgYAML := strings.Join([]string{
+		"vlogs:",
+		"  url: http://victorialogs:9428",
+		"labels:",
+		"  labelRemap:",
+		"    detected_level: level",
+		"",
+	}, "\n")
+	if _, err := cfgFile.WriteString(cfgYAML); err != nil {
+		t.Fatalf("WriteString(config): %v", err)
+	}
+	if err := cfgFile.Close(); err != nil {
+		t.Fatalf("Close(config): %v", err)
+	}
+
+	cfg, err := Load(cfgFile.Name())
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+
+	if got := cfg.Labels.LabelRemap["detected_level"]; got != "level" {
+		t.Fatalf("LabelRemap[detected_level] = %q, want %q", got, "level")
+	}
+}
+
+func TestLoadAllowsExplicitServiceNameFallbackFieldsFromConfig(t *testing.T) {
+	cfgFile, err := os.CreateTemp(t.TempDir(), "config-*.yaml")
+	if err != nil {
+		t.Fatalf("CreateTemp(config): %v", err)
+	}
+	cfgYAML := strings.Join([]string{
+		"vlogs:",
+		"  url: http://victorialogs:9428",
+		"labels:",
+		"  serviceNameFallbackFields:",
+		"    - svc",
+		"    - app",
+		"",
+	}, "\n")
+	if _, err := cfgFile.WriteString(cfgYAML); err != nil {
+		t.Fatalf("WriteString(config): %v", err)
+	}
+	if err := cfgFile.Close(); err != nil {
+		t.Fatalf("Close(config): %v", err)
+	}
+
+	cfg, err := Load(cfgFile.Name())
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+
+	if got := cfg.Labels.ServiceNameFallbackFields; len(got) != 2 || got[0] != "svc" || got[1] != "app" {
+		t.Fatalf("ServiceNameFallbackFields = %v, want [svc app]", got)
+	}
+}
+
+func TestLoadAllowsExplicitAggregationScanLimitFromConfig(t *testing.T) {
+	cfgFile, err := os.CreateTemp(t.TempDir(), "config-*.yaml")
+	if err != nil {
+		t.Fatalf("CreateTemp(config): %v", err)
+	}
+	cfgYAML := strings.Join([]string{
+		"vlogs:",
+		"  url: http://victorialogs:9428",
+		"limits:",
+		"  aggregationScanLimit: 1234",
+		"",
+	}, "\n")
+	if _, err := cfgFile.WriteString(cfgYAML); err != nil {
+		t.Fatalf("WriteString(config): %v", err)
+	}
+	if err := cfgFile.Close(); err != nil {
+		t.Fatalf("Close(config): %v", err)
+	}
+
+	cfg, err := Load(cfgFile.Name())
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+
+	if cfg.Limits.AggregationScanLimit != 1234 {
+		t.Fatalf("AggregationScanLimit = %d, want 1234", cfg.Limits.AggregationScanLimit)
 	}
 }
 
@@ -114,6 +213,7 @@ func TestValidateReturnsCombinedErrors(t *testing.T) {
 			MaxQueueDepth:         -1,
 			MaxResponseBodyBytes:  0,
 			MaxStreamsPerResponse: 0,
+			AggregationScanLimit:  -1,
 			MaxMemoryMB:           0,
 			MaxQueryRangeHours:    0,
 			MaxLimit:              1,
@@ -137,6 +237,7 @@ func TestValidateReturnsCombinedErrors(t *testing.T) {
 		"limits.maxQueueDepth must be >= 0",
 		"limits.maxResponseBodyBytes must be >= 1",
 		"limits.maxStreamsPerResponse must be >= 1",
+		"limits.aggregationScanLimit must be >= 0",
 		"limits.maxMemoryMB must be >= 1",
 		"limits.maxQueryRangeHours must be >= 1",
 		`limits.defaultLimit (2) must be <= limits.maxLimit (1)`,
@@ -166,6 +267,18 @@ func TestApplyEnvCreatesBasicAuthLazily(t *testing.T) {
 	}
 	if raw.VLogs.BasicAuth.Password != "pw" {
 		t.Errorf("Password = %q, want %q", raw.VLogs.BasicAuth.Password, "pw")
+	}
+}
+
+func TestApplyEnvSetsAggregationScanLimit(t *testing.T) {
+	raw := defaultRaw()
+
+	t.Setenv("PROXY_LIMITS_AGGREGATIONSCANLIMIT", "321")
+
+	applyEnv(raw)
+
+	if raw.Limits.AggregationScanLimit != 321 {
+		t.Fatalf("AggregationScanLimit = %d, want 321", raw.Limits.AggregationScanLimit)
 	}
 }
 

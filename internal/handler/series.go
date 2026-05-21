@@ -76,7 +76,10 @@ func (d *Deps) seriesFilter(ctx *fasthttp.RequestCtx) string {
 		return "*"
 	}
 
-	res, err := translator.Translate(ast, translator.Options{LabelRemap: d.Cfg.Labels.LabelRemap})
+	res, err := translator.Translate(ast, translator.Options{
+		LabelRemap:                d.Cfg.Labels.LabelRemap,
+		ServiceNameFallbackFields: d.Cfg.Labels.ServiceNameFallbackFields,
+	})
 	if err != nil {
 		slog.Warn("Series: cannot translate match[] selector, using match-all",
 			"match", match, "err", err)
