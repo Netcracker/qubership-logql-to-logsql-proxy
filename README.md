@@ -111,7 +111,7 @@ flowchart TD
 ### Improvements
 
 - [ ] Add `detected_level` label to all logs to support colors on histograms
-- [ ] Add allow and deny lists for labels and fields
+- [x] Add allow and deny lists for labels and fields
 - [ ] Add metrics
 - [ ] Improve logs to show original errors
 - [ ] Measure performance and resource usage

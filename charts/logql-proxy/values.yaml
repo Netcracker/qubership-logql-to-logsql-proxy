@@ -226,6 +226,12 @@ proxy:
     # Empty = discover dynamically from VictoriaLogs /field_names on every request.
     knownLabels: []
 
+    # Optional metadata filters for label and field discovery endpoints.
+    allowLabels: []
+    denyLabels: []
+    allowFields: []
+    denyFields: []
+
     # Optional fallback fields used to synthesize Grafana's service_name label
     # when the logs do not store service_name directly.
     serviceNameFallbackFields: []

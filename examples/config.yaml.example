@@ -39,6 +39,19 @@ labels:
   # Leave empty to discover dynamically from VL /field_names
   knownLabels: []
 
+  # Optional metadata filters for label and field discovery endpoints.
+  # Empty allow-lists mean "allow everything".
+  # allowLabels:
+  #   - app
+  #   - namespace
+  # denyLabels:
+  #   - _stream
+  # allowFields:
+  #   - level
+  #   - detected_level
+  # denyFields:
+  #   - _msg
+
   # Optional fallback fields used to synthesize Grafana's service_name label
   # when the logs do not store service_name directly.
   # serviceNameFallbackFields:

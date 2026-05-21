@@ -21,6 +21,10 @@ func (d *Deps) LabelValues(ctx *fasthttp.RequestCtx) {
 		writeError(ctx, fasthttp.StatusBadRequest, "bad_data", "label name is required")
 		return
 	}
+	if !nameAllowed(name, d.Cfg.Labels.AllowLabels, d.Cfg.Labels.DenyLabels) {
+		writeJSON(ctx, fasthttp.StatusOK, loki.LabelValuesResponse{Status: "success", Data: []string{}})
+		return
+	}
 
 	start, end, err := parseTimeRange(ctx)
 	if err != nil {
@@ -69,6 +73,10 @@ func (d *Deps) DetectedFieldValues(ctx *fasthttp.RequestCtx) {
 		writeError(ctx, fasthttp.StatusBadRequest, "bad_data", "field name is required")
 		return
 	}
+	if !nameAllowed(name, d.Cfg.Labels.AllowFields, d.Cfg.Labels.DenyFields) {
+		writeJSON(ctx, fasthttp.StatusOK, loki.LabelValuesResponse{Status: "success", Data: []string{}})
+		return
+	}
 
 	start, end, err := parseTimeRange(ctx)
 	if err != nil {
@@ -101,4 +109,25 @@ func (d *Deps) DetectedFieldValues(ctx *fasthttp.RequestCtx) {
 	}
 
 	writeJSON(ctx, fasthttp.StatusOK, loki.LabelValuesResponse{Status: "success", Data: values})
+}
+
+func nameAllowed(name string, allow, deny []string) bool {
+	if len(allow) > 0 {
+		allowed := false
+		for _, item := range allow {
+			if item == name {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return false
+		}
+	}
+	for _, item := range deny {
+		if item == name {
+			return false
+		}
+	}
+	return true
 }

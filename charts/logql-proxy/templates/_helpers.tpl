@@ -122,6 +122,22 @@ labels:
   {{- else }}
   knownLabels: []
   {{- end }}
+  {{- if .Values.proxy.labels.allowLabels }}
+  allowLabels:
+    {{- toYaml .Values.proxy.labels.allowLabels | nindent 4 }}
+  {{- end }}
+  {{- if .Values.proxy.labels.denyLabels }}
+  denyLabels:
+    {{- toYaml .Values.proxy.labels.denyLabels | nindent 4 }}
+  {{- end }}
+  {{- if .Values.proxy.labels.allowFields }}
+  allowFields:
+    {{- toYaml .Values.proxy.labels.allowFields | nindent 4 }}
+  {{- end }}
+  {{- if .Values.proxy.labels.denyFields }}
+  denyFields:
+    {{- toYaml .Values.proxy.labels.denyFields | nindent 4 }}
+  {{- end }}
   {{- if .Values.proxy.labels.serviceNameFallbackFields }}
   serviceNameFallbackFields:
     {{- toYaml .Values.proxy.labels.serviceNameFallbackFields | nindent 4 }}

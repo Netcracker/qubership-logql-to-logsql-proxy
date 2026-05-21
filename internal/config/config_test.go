@@ -44,6 +44,8 @@ func TestLoadAppliesDefaultsFileEnvAndPasswordFile(t *testing.T) {
 
 	t.Setenv("PROXY_SERVER_LISTENADDR", ":9999")
 	t.Setenv("PROXY_LABELS_KNOWNLABELS", " app , team,, env ")
+	t.Setenv("PROXY_LABELS_ALLOWLABELS", " app , env ")
+	t.Setenv("PROXY_LABELS_DENYFIELDS", " _stream , _stream_id ")
 	t.Setenv("PROXY_LOG_LEVEL", "debug")
 
 	cfg, err := Load(cfgFile.Name())
@@ -74,6 +76,12 @@ func TestLoadAppliesDefaultsFileEnvAndPasswordFile(t *testing.T) {
 	}
 	if got := cfg.Labels.KnownLabels; len(got) != 3 || got[0] != "app" || got[1] != "team" || got[2] != "env" {
 		t.Errorf("KnownLabels = %v, want [app team env]", got)
+	}
+	if got := cfg.Labels.AllowLabels; len(got) != 2 || got[0] != "app" || got[1] != "env" {
+		t.Errorf("AllowLabels = %v, want [app env]", got)
+	}
+	if got := cfg.Labels.DenyFields; len(got) != 2 || got[0] != "_stream" || got[1] != "_stream_id" {
+		t.Errorf("DenyFields = %v, want [_stream _stream_id]", got)
 	}
 	if len(cfg.Labels.ServiceNameFallbackFields) == 0 {
 		t.Errorf("ServiceNameFallbackFields should be populated by default")
@@ -182,6 +190,52 @@ func TestLoadAllowsExplicitAggregationScanLimitFromConfig(t *testing.T) {
 
 	if cfg.Limits.AggregationScanLimit != 1234 {
 		t.Fatalf("AggregationScanLimit = %d, want 1234", cfg.Limits.AggregationScanLimit)
+	}
+}
+
+func TestLoadAllowsExplicitLabelAndFieldFiltersFromConfig(t *testing.T) {
+	cfgFile, err := os.CreateTemp(t.TempDir(), "config-*.yaml")
+	if err != nil {
+		t.Fatalf("CreateTemp(config): %v", err)
+	}
+	cfgYAML := strings.Join([]string{
+		"vlogs:",
+		"  url: http://victorialogs:9428",
+		"labels:",
+		"  allowLabels:",
+		"    - app",
+		"    - namespace",
+		"  denyLabels:",
+		"    - _stream",
+		"  allowFields:",
+		"    - level",
+		"  denyFields:",
+		"    - _msg",
+		"",
+	}, "\n")
+	if _, err := cfgFile.WriteString(cfgYAML); err != nil {
+		t.Fatalf("WriteString(config): %v", err)
+	}
+	if err := cfgFile.Close(); err != nil {
+		t.Fatalf("Close(config): %v", err)
+	}
+
+	cfg, err := Load(cfgFile.Name())
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+
+	if got := cfg.Labels.AllowLabels; len(got) != 2 || got[0] != "app" || got[1] != "namespace" {
+		t.Fatalf("AllowLabels = %v, want [app namespace]", got)
+	}
+	if got := cfg.Labels.DenyLabels; len(got) != 1 || got[0] != "_stream" {
+		t.Fatalf("DenyLabels = %v, want [_stream]", got)
+	}
+	if got := cfg.Labels.AllowFields; len(got) != 1 || got[0] != "level" {
+		t.Fatalf("AllowFields = %v, want [level]", got)
+	}
+	if got := cfg.Labels.DenyFields; len(got) != 1 || got[0] != "_msg" {
+		t.Fatalf("DenyFields = %v, want [_msg]", got)
 	}
 }
 

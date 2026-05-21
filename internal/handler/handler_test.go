@@ -563,6 +563,28 @@ func TestLabelsFromStaticConfig(t *testing.T) {
 	}
 }
 
+func TestLabelsApplyAllowAndDenyFilters(t *testing.T) {
+	deps := newDeps(&mockVL{fieldNames: []string{"app", "env", "_stream", "pod"}})
+	deps.Cfg.Labels.AllowLabels = []string{"app", "env", "_stream"}
+	deps.Cfg.Labels.DenyLabels = []string{"_stream"}
+	addr, cleanup := newTestServer(t, buildHandler(deps))
+	defer cleanup()
+
+	resp, err := http.Get(addr + "/loki/api/v1/labels?start=1705320000&end=1705323600")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer closeRespBody(t, resp)
+
+	var body loki.LabelsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got := body.Data; len(got) != 2 || got[0] != "app" || got[1] != "env" {
+		t.Fatalf("labels = %v, want [app env]", got)
+	}
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // /loki/api/v1/detected_labels
 // ────────────────────────────────────────────────────────────────────────────
@@ -620,6 +642,30 @@ func TestDetectedLabelsFromStaticConfig(t *testing.T) {
 	}
 }
 
+func TestDetectedLabelsApplyAllowAndDenyFilters(t *testing.T) {
+	deps := newDeps(&mockVL{fieldNames: []string{"app", "_stream", "namespace"}})
+	deps.Cfg.Labels.DenyLabels = []string{"_stream"}
+	addr, cleanup := newTestServer(t, buildHandler(deps))
+	defer cleanup()
+
+	resp, err := http.Get(addr + "/loki/api/v1/detected_labels?start=1705320000&end=1705323600")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer closeRespBody(t, resp)
+
+	var body loki.DetectedLabelsData
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.DetectedLabels) != 2 {
+		t.Fatalf("detectedLabels count = %d, want 2", len(body.DetectedLabels))
+	}
+	if body.DetectedLabels[0].Label != "app" || body.DetectedLabels[1].Label != "namespace" {
+		t.Fatalf("detectedLabels = %v, want [app namespace]", body.DetectedLabels)
+	}
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // /loki/api/v1/label/:name/values
 // ────────────────────────────────────────────────────────────────────────────
@@ -671,6 +717,27 @@ func TestDetectedFieldValuesSuccess(t *testing.T) {
 	}
 	if len(body.Data) != 2 {
 		t.Errorf("expected 2 values, got %d: %v", len(body.Data), body.Data)
+	}
+}
+
+func TestDetectedFieldValuesDeniedFieldReturnsEmptyList(t *testing.T) {
+	deps := newDeps(&mockVL{fieldValues: []string{"error", "warn"}})
+	deps.Cfg.Labels.DenyFields = []string{"detected_level"}
+	addr, cleanup := newTestServer(t, buildHandler(deps))
+	defer cleanup()
+
+	resp, err := http.Get(addr + "/loki/api/v1/detected_field/detected_level/values?start=1705320000&end=1705323600")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer closeRespBody(t, resp)
+
+	var body loki.LabelValuesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Data) != 0 {
+		t.Fatalf("expected empty values, got %v", body.Data)
 	}
 }
 

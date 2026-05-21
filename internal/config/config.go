@@ -78,6 +78,22 @@ type LabelsConfig struct {
 	// KnownLabels is a static allowlist for /labels. Empty = query VL dynamically.
 	KnownLabels []string
 
+	// AllowLabels limits which label names may be exposed by metadata endpoints
+	// such as /labels and /detected_labels. Empty = allow all labels.
+	AllowLabels []string
+
+	// DenyLabels excludes label names from metadata endpoints after AllowLabels
+	// is applied.
+	DenyLabels []string
+
+	// AllowFields limits which field names may be exposed by metadata endpoints
+	// such as /detected_fields. Empty = allow all fields.
+	AllowFields []string
+
+	// DenyFields excludes field names from metadata endpoints after AllowFields
+	// is applied.
+	DenyFields []string
+
 	// ServiceNameFallbackFields controls which VictoriaLogs fields are consulted
 	// when Grafana queries the synthetic "service_name" label. The first
 	// non-empty field becomes the synthetic service_name in grouped responses,
@@ -162,6 +178,10 @@ type rawLimitsConfig struct {
 
 type rawLabelsConfig struct {
 	KnownLabels               []string          `yaml:"knownLabels"`
+	AllowLabels               []string          `yaml:"allowLabels"`
+	DenyLabels                []string          `yaml:"denyLabels"`
+	AllowFields               []string          `yaml:"allowFields"`
+	DenyFields                []string          `yaml:"denyFields"`
 	ServiceNameFallbackFields []string          `yaml:"serviceNameFallbackFields"`
 	LabelRemap                map[string]string `yaml:"labelRemap"`
 	MetadataCacheTTL          string            `yaml:"metadataCacheTTL"`
@@ -316,24 +336,22 @@ func applyEnv(r *rawConfig) {
 
 	// Labels
 	if v := os.Getenv("PROXY_LABELS_KNOWNLABELS"); v != "" {
-		parts := strings.Split(v, ",")
-		labels := parts[:0]
-		for _, p := range parts {
-			if t := strings.TrimSpace(p); t != "" {
-				labels = append(labels, t)
-			}
-		}
-		r.Labels.KnownLabels = labels
+		r.Labels.KnownLabels = splitCSV(v)
+	}
+	if v := os.Getenv("PROXY_LABELS_ALLOWLABELS"); v != "" {
+		r.Labels.AllowLabels = splitCSV(v)
+	}
+	if v := os.Getenv("PROXY_LABELS_DENYLABELS"); v != "" {
+		r.Labels.DenyLabels = splitCSV(v)
+	}
+	if v := os.Getenv("PROXY_LABELS_ALLOWFIELDS"); v != "" {
+		r.Labels.AllowFields = splitCSV(v)
+	}
+	if v := os.Getenv("PROXY_LABELS_DENYFIELDS"); v != "" {
+		r.Labels.DenyFields = splitCSV(v)
 	}
 	if v := os.Getenv("PROXY_LABELS_SERVICENAMEFALLBACKFIELDS"); v != "" {
-		parts := strings.Split(v, ",")
-		fields := parts[:0]
-		for _, p := range parts {
-			if t := strings.TrimSpace(p); t != "" {
-				fields = append(fields, t)
-			}
-		}
-		r.Labels.ServiceNameFallbackFields = fields
+		r.Labels.ServiceNameFallbackFields = splitCSV(v)
 	}
 	envStr("PROXY_LABELS_METADATACACHETTL", &r.Labels.MetadataCacheTTL)
 	envInt("PROXY_LABELS_METADATACACHESIZE", &r.Labels.MetadataCacheSize)
@@ -391,6 +409,10 @@ func convert(r *rawConfig) (*Config, error) {
 		},
 		Labels: LabelsConfig{
 			KnownLabels:               r.Labels.KnownLabels,
+			AllowLabels:               r.Labels.AllowLabels,
+			DenyLabels:                r.Labels.DenyLabels,
+			AllowFields:               r.Labels.AllowFields,
+			DenyFields:                r.Labels.DenyFields,
 			ServiceNameFallbackFields: r.Labels.ServiceNameFallbackFields,
 			LabelRemap:                r.Labels.LabelRemap,
 			MetadataCacheTTL:          dur(r.Labels.MetadataCacheTTL, "labels.metadataCacheTTL"),
@@ -514,4 +536,15 @@ func envInt64(name string, dst *int64) {
 			*dst = n
 		}
 	}
+}
+
+func splitCSV(v string) []string {
+	parts := strings.Split(v, ",")
+	items := parts[:0]
+	for _, p := range parts {
+		if t := strings.TrimSpace(p); t != "" {
+			items = append(items, t)
+		}
+	}
+	return items
 }

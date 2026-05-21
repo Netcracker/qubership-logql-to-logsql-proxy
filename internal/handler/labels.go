@@ -30,9 +30,10 @@ func (d *Deps) Labels(ctx *fasthttp.RequestCtx) {
 
 	// Static allowlist fast path.
 	if len(d.Cfg.Labels.KnownLabels) > 0 {
+		names := filterNames(d.Cfg.Labels.KnownLabels, d.Cfg.Labels.AllowLabels, d.Cfg.Labels.DenyLabels)
 		writeJSON(ctx, fasthttp.StatusOK, loki.LabelsResponse{
 			Status: "success",
-			Data:   d.Cfg.Labels.KnownLabels,
+			Data:   names,
 		})
 		return
 	}
@@ -57,9 +58,11 @@ func (d *Deps) Labels(ctx *fasthttp.RequestCtx) {
 	}
 
 	if d.Cfg.Labels.MetadataCacheTTL > 0 {
+		names = filterNames(names, d.Cfg.Labels.AllowLabels, d.Cfg.Labels.DenyLabels)
 		d.Cache.Set(key, names, d.Cfg.Labels.MetadataCacheTTL)
 	}
 
+	names = filterNames(names, d.Cfg.Labels.AllowLabels, d.Cfg.Labels.DenyLabels)
 	writeJSON(ctx, fasthttp.StatusOK, loki.LabelsResponse{Status: "success", Data: names})
 }
 
@@ -83,8 +86,9 @@ func (d *Deps) DetectedLabels(ctx *fasthttp.RequestCtx) {
 
 	// Static allowlist fast path.
 	if len(d.Cfg.Labels.KnownLabels) > 0 {
-		dl := make([]loki.DetectedLabel, len(d.Cfg.Labels.KnownLabels))
-		for i, name := range d.Cfg.Labels.KnownLabels {
+		names := filterNames(d.Cfg.Labels.KnownLabels, d.Cfg.Labels.AllowLabels, d.Cfg.Labels.DenyLabels)
+		dl := make([]loki.DetectedLabel, len(names))
+		for i, name := range names {
 			dl[i] = loki.DetectedLabel{Label: name}
 		}
 		writeJSON(ctx, fasthttp.StatusOK, loki.DetectedLabelsData{DetectedLabels: dl})
@@ -111,9 +115,11 @@ func (d *Deps) DetectedLabels(ctx *fasthttp.RequestCtx) {
 	}
 
 	if d.Cfg.Labels.MetadataCacheTTL > 0 {
+		names = filterNames(names, d.Cfg.Labels.AllowLabels, d.Cfg.Labels.DenyLabels)
 		d.Cache.Set(key, names, d.Cfg.Labels.MetadataCacheTTL)
 	}
 
+	names = filterNames(names, d.Cfg.Labels.AllowLabels, d.Cfg.Labels.DenyLabels)
 	writeJSON(ctx, fasthttp.StatusOK, loki.DetectedLabelsData{DetectedLabels: toDetectedLabels(names)})
 }
 
@@ -167,12 +173,41 @@ func (d *Deps) DetectedFields(ctx *fasthttp.RequestCtx) {
 		return
 	}
 
+	names = filterNames(names, d.Cfg.Labels.AllowFields, d.Cfg.Labels.DenyFields)
 	fields := make([]loki.DetectedField, len(names))
 	for i, name := range names {
 		fields[i] = loki.DetectedField{Label: name, Type: "string"}
 	}
 
 	writeJSON(ctx, fasthttp.StatusOK, loki.DetectedFieldsResponse{Fields: fields})
+}
+
+func filterNames(names, allow, deny []string) []string {
+	if len(names) == 0 {
+		return nil
+	}
+	allowSet := make(map[string]struct{}, len(allow))
+	for _, name := range allow {
+		allowSet[name] = struct{}{}
+	}
+	denySet := make(map[string]struct{}, len(deny))
+	for _, name := range deny {
+		denySet[name] = struct{}{}
+	}
+
+	filtered := names[:0]
+	for _, name := range names {
+		if len(allowSet) > 0 {
+			if _, ok := allowSet[name]; !ok {
+				continue
+			}
+		}
+		if _, denied := denySet[name]; denied {
+			continue
+		}
+		filtered = append(filtered, name)
+	}
+	return filtered
 }
 
 func selectorOnlyLogsQLFilter(queryStr string, opts translator.Options) string {

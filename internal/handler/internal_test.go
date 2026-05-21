@@ -303,6 +303,28 @@ func TestDetectedFieldsIgnoresPipelineStagesForScoping(t *testing.T) {
 	}
 }
 
+func TestDetectedFieldsApplyAllowAndDenyFilters(t *testing.T) {
+	deps := testDeps(&stubVL{
+		fieldNamesFn: func(_ context.Context, req vlogs.FieldNamesRequest) ([]string, error) {
+			return []string{"level", "_msg", "_stream", "pod"}, nil
+		},
+	})
+	deps.Cfg.Labels.AllowFields = []string{"level", "_stream", "pod"}
+	deps.Cfg.Labels.DenyFields = []string{"_stream"}
+
+	ctx := newCtx(`/loki/api/v1/detected_fields?query={app="api"}&start=1705320000&end=1705323600`)
+	deps.DetectedFields(ctx)
+
+	if ctx.Response.StatusCode() != fasthttp.StatusOK {
+		t.Fatalf("status = %d, want 200 body=%s", ctx.Response.StatusCode(), ctx.Response.Body())
+	}
+
+	body := decodeBody[loki.DetectedFieldsResponse](t, ctx)
+	if len(body.Fields) != 2 || body.Fields[0].Label != "level" || body.Fields[1].Label != "pod" {
+		t.Fatalf("fields = %+v, want [level pod]", body.Fields)
+	}
+}
+
 func TestDetectedFieldsErrorReturnsBadGateway(t *testing.T) {
 	deps := testDeps(&stubVL{
 		fieldNamesFn: func(_ context.Context, req vlogs.FieldNamesRequest) ([]string, error) {
