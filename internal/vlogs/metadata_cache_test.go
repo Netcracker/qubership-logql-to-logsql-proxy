@@ -83,3 +83,26 @@ func TestMetadataCacheKeyHelpersRoundToMinute(t *testing.T) {
 		t.Errorf("FieldValuesKey() = %q, want %q", got, want)
 	}
 }
+
+func TestMetadataCacheHelpers(t *testing.T) {
+	cache := NewMetadataCache(2)
+	cache.entries["expired"] = cacheEntry{value: []string{"old"}, expiresAt: time.Now().Add(-time.Second)}
+	cache.entries["live"] = cacheEntry{value: []string{"new"}, expiresAt: time.Now().Add(time.Minute)}
+
+	if removed := cache.evictExpiredLocked(); removed != 1 {
+		t.Fatalf("evictExpiredLocked() removed %d entries, want 1", removed)
+	}
+	if _, ok := cache.entries["expired"]; ok {
+		t.Fatalf("expected expired entry to be removed")
+	}
+
+	if got := cacheMetricName("names:20260521T1200Z:20260521T1201Z"); got != "field_names" {
+		t.Fatalf("cacheMetricName(names) = %q, want %q", got, "field_names")
+	}
+	if got := cacheMetricName("values:app:20260521T1200Z:20260521T1201Z"); got != "field_values" {
+		t.Fatalf("cacheMetricName(values) = %q, want %q", got, "field_values")
+	}
+	if got := cacheMetricName("other"); got != "unknown" {
+		t.Fatalf("cacheMetricName(other) = %q, want %q", got, "unknown")
+	}
+}

@@ -416,6 +416,36 @@ func TestHelpersCoverFallbackAndParsing(t *testing.T) {
 	}
 }
 
+func TestMetricsHelpersNormalizedRoute(t *testing.T) {
+	cases := map[string]string{
+		"/loki/api/v1/label/app/values":            "/loki/api/v1/label/:name/values",
+		"/loki/api/v1/detected_field/level/values": "/loki/api/v1/detected_field/:name/values",
+		"/loki/api/v1/query_range":                 "/loki/api/v1/query_range",
+	}
+	for path, want := range cases {
+		if got := normalizedRoute(path); got != want {
+			t.Fatalf("normalizedRoute(%q) = %q, want %q", path, got, want)
+		}
+	}
+}
+
+func TestParseAndTranslateWithMetrics(t *testing.T) {
+	var ctx fasthttp.RequestCtx
+
+	ast, ok := parseLogQLWithMetrics(&ctx, `{app="api"} |= "err"`)
+	if !ok {
+		t.Fatalf("parseLogQLWithMetrics() returned ok=false for valid query")
+	}
+
+	result, ok := translateQueryWithMetrics(&ctx, ast, translator.Options{})
+	if !ok {
+		t.Fatalf("translateQueryWithMetrics() returned ok=false for valid AST")
+	}
+	if result.LogsQL == "" {
+		t.Fatalf("expected non-empty translated LogsQL")
+	}
+}
+
 func TestRecoveryAndLoggingMiddleware(t *testing.T) {
 	panicCtx := newCtx("/boom")
 	RecoveryMiddleware(func(*fasthttp.RequestCtx) {
