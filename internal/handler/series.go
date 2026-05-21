@@ -2,10 +2,12 @@ package handler
 
 import (
 	"log/slog"
+	"time"
 
 	"github.com/valyala/fasthttp"
 
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/loki"
+	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/metrics"
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/parser"
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/translator"
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/vlogs"
@@ -56,6 +58,9 @@ func (d *Deps) Series(ctx *fasthttp.RequestCtx) {
 			"failed to query streams from VictoriaLogs")
 		return
 	}
+	if err == vlogs.ErrResponseTooLarge {
+		metrics.IncResponseTruncated("series_body_limit")
+	}
 
 	// Build the series response from the distinct streams collected by the grouper.
 	streams := grouper.Streams()
@@ -80,17 +85,21 @@ func (d *Deps) seriesFilter(ctx *fasthttp.RequestCtx) string {
 		return "*"
 	}
 
+	start := time.Now()
 	ast, err := parser.Parse(match)
+	metrics.ObserveParseDuration(time.Since(start))
 	if err != nil {
 		slog.Warn("Series: cannot parse match[] selector, using match-all",
 			"match", match, "err", err)
 		return "*"
 	}
 
+	start = time.Now()
 	res, err := translator.Translate(ast, translator.Options{
 		LabelRemap:                d.Cfg.Labels.LabelRemap,
 		ServiceNameFallbackFields: d.Cfg.Labels.ServiceNameFallbackFields,
 	})
+	metrics.ObserveTranslateDuration(time.Since(start))
 	if err != nil {
 		slog.Warn("Series: cannot translate match[] selector, using match-all",
 			"match", match, "err", err)

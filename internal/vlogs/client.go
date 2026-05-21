@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/config"
+	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/metrics"
 )
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -82,6 +83,12 @@ func NewClient(cfg config.VLogsConfig, maxResponseBytes int64) *Client {
 // record-by-record into fn. The total bytes read from VL are capped at
 // c.maxB; on overflow fn is not called and ErrResponseTooLarge is returned.
 func (c *Client) QueryLogs(ctx context.Context, req LogQueryRequest, fn func(Record) error) error {
+	started := time.Now()
+	var resultErr error
+	defer func() {
+		metrics.ObserveVLogs("query_logs", time.Since(started), resultErr)
+	}()
+
 	form := url.Values{}
 	form.Set("query", req.Query)
 	form.Set("start", formatTime(req.Start))
@@ -96,28 +103,38 @@ func (c *Client) QueryLogs(ctx context.Context, req LogQueryRequest, fn func(Rec
 		strings.NewReader(form.Encode()),
 	)
 	if err != nil {
-		return fmt.Errorf("build QueryLogs request: %w", err)
+		resultErr = fmt.Errorf("build QueryLogs request: %w", err)
+		return resultErr
 	}
 	httpReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	c.decorateRequest(httpReq)
 
 	resp, err := c.httpCl.Do(httpReq)
 	if err != nil {
-		return fmt.Errorf("QueryLogs HTTP: %w", err)
+		resultErr = fmt.Errorf("QueryLogs HTTP: %w", err)
+		return resultErr
 	}
 	defer closeBody(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("QueryLogs: VL returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		resultErr = fmt.Errorf("QueryLogs: VL returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return resultErr
 	}
 
-	return StreamDecoder(ctx, resp.Body, c.maxB, fn)
+	resultErr = StreamDecoder(ctx, resp.Body, c.maxB, fn)
+	return resultErr
 }
 
 // QueryHits calls POST /select/logsql/hits and returns all hit buckets.
 // The response is fully buffered (bounded by timeRange/step).
 func (c *Client) QueryHits(ctx context.Context, req HitsQueryRequest) ([]HitBucket, error) {
+	started := time.Now()
+	var resultErr error
+	defer func() {
+		metrics.ObserveVLogs("query_hits", time.Since(started), resultErr)
+	}()
+
 	form := url.Values{}
 	form.Set("query", req.Query)
 	form.Set("start", formatTime(req.Start))
@@ -130,25 +147,29 @@ func (c *Client) QueryHits(ctx context.Context, req HitsQueryRequest) ([]HitBuck
 		strings.NewReader(form.Encode()),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("build QueryHits request: %w", err)
+		resultErr = fmt.Errorf("build QueryHits request: %w", err)
+		return nil, resultErr
 	}
 	httpReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	c.decorateRequest(httpReq)
 
 	resp, err := c.httpCl.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("QueryHits HTTP: %w", err)
+		resultErr = fmt.Errorf("QueryHits HTTP: %w", err)
+		return nil, resultErr
 	}
 	defer closeBody(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, fmt.Errorf("QueryHits: VL returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		resultErr = fmt.Errorf("QueryHits: VL returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, resultErr
 	}
 
 	var vlResp vlHitsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&vlResp); err != nil {
-		return nil, fmt.Errorf("decode QueryHits response: %w", err)
+		resultErr = fmt.Errorf("decode QueryHits response: %w", err)
+		return nil, resultErr
 	}
 
 	buckets := make([]HitBucket, 0, len(vlResp.Hits))
@@ -156,20 +177,23 @@ func (c *Client) QueryHits(ctx context.Context, req HitsQueryRequest) ([]HitBuck
 		switch {
 		case len(e.Timestamps) > 0 || len(e.Values) > 0:
 			if len(e.Timestamps) != len(e.Values) {
-				return nil, fmt.Errorf("invalid QueryHits response: timestamps len %d != values len %d",
+				resultErr = fmt.Errorf("invalid QueryHits response: timestamps len %d != values len %d",
 					len(e.Timestamps), len(e.Values))
+				return nil, resultErr
 			}
 			for i, tsRaw := range e.Timestamps {
 				ts, err := parseHitTimestamp(tsRaw)
 				if err != nil {
-					return nil, err
+					resultErr = err
+					return nil, resultErr
 				}
 				buckets = append(buckets, HitBucket{Timestamp: ts, Count: e.Values[i]})
 			}
 		default:
 			ts, err := parseHitTimestamp(e.Timestamp)
 			if err != nil {
-				return nil, err
+				resultErr = err
+				return nil, resultErr
 			}
 			buckets = append(buckets, HitBucket{Timestamp: ts, Count: e.Hits})
 		}
@@ -192,9 +216,16 @@ func parseHitTimestamp(raw string) (time.Time, error) {
 // FieldNames calls GET /select/logsql/field_names and returns the list of
 // indexed field names visible in the given time range.
 func (c *Client) FieldNames(ctx context.Context, req FieldNamesRequest) ([]string, error) {
+	started := time.Now()
+	var resultErr error
+	defer func() {
+		metrics.ObserveVLogs("field_names", time.Since(started), resultErr)
+	}()
+
 	u, err := url.Parse(c.cfg.URL + "/select/logsql/field_names")
 	if err != nil {
-		return nil, fmt.Errorf("build FieldNames URL: %w", err)
+		resultErr = fmt.Errorf("build FieldNames URL: %w", err)
+		return nil, resultErr
 	}
 	q := u.Query()
 	q.Set("query", req.Query)
@@ -204,24 +235,28 @@ func (c *Client) FieldNames(ctx context.Context, req FieldNamesRequest) ([]strin
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return nil, fmt.Errorf("build FieldNames request: %w", err)
+		resultErr = fmt.Errorf("build FieldNames request: %w", err)
+		return nil, resultErr
 	}
 	c.decorateRequest(httpReq)
 
 	resp, err := c.httpCl.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("FieldNames HTTP: %w", err)
+		resultErr = fmt.Errorf("FieldNames HTTP: %w", err)
+		return nil, resultErr
 	}
 	defer closeBody(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, fmt.Errorf("FieldNames: VL returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		resultErr = fmt.Errorf("FieldNames: VL returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, resultErr
 	}
 
 	var vlResp vlFieldsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&vlResp); err != nil {
-		return nil, fmt.Errorf("decode FieldNames response: %w", err)
+		resultErr = fmt.Errorf("decode FieldNames response: %w", err)
+		return nil, resultErr
 	}
 	names := make([]string, len(vlResp.Values))
 	for i, e := range vlResp.Values {
@@ -233,9 +268,16 @@ func (c *Client) FieldNames(ctx context.Context, req FieldNamesRequest) ([]strin
 // FieldValues calls GET /select/logsql/field_values and returns distinct values
 // for the requested field name.
 func (c *Client) FieldValues(ctx context.Context, req FieldValuesRequest) ([]string, error) {
+	started := time.Now()
+	var resultErr error
+	defer func() {
+		metrics.ObserveVLogs("field_values", time.Since(started), resultErr)
+	}()
+
 	u, err := url.Parse(c.cfg.URL + "/select/logsql/field_values")
 	if err != nil {
-		return nil, fmt.Errorf("build FieldValues URL: %w", err)
+		resultErr = fmt.Errorf("build FieldValues URL: %w", err)
+		return nil, resultErr
 	}
 	q := u.Query()
 	q.Set("field", req.FieldName)
@@ -249,24 +291,28 @@ func (c *Client) FieldValues(ctx context.Context, req FieldValuesRequest) ([]str
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return nil, fmt.Errorf("build FieldValues request: %w", err)
+		resultErr = fmt.Errorf("build FieldValues request: %w", err)
+		return nil, resultErr
 	}
 	c.decorateRequest(httpReq)
 
 	resp, err := c.httpCl.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("FieldValues HTTP: %w", err)
+		resultErr = fmt.Errorf("FieldValues HTTP: %w", err)
+		return nil, resultErr
 	}
 	defer closeBody(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, fmt.Errorf("FieldValues: VL returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		resultErr = fmt.Errorf("FieldValues: VL returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, resultErr
 	}
 
 	var vlResp vlFieldsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&vlResp); err != nil {
-		return nil, fmt.Errorf("decode FieldValues response: %w", err)
+		resultErr = fmt.Errorf("decode FieldValues response: %w", err)
+		return nil, resultErr
 	}
 	values := make([]string, len(vlResp.Values))
 	for i, e := range vlResp.Values {

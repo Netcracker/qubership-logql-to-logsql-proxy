@@ -13,6 +13,7 @@ import (
 	"github.com/valyala/fasthttp"
 
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/loki"
+	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/metrics"
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/parser"
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/translator"
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/vlogs"
@@ -119,27 +120,16 @@ func (d *Deps) handleQuery(ctx *fasthttp.RequestCtx, instant bool) {
 		step = parseDuration(stepStr)
 	}
 
-	// Parse LogQL.
-	ast, err := parser.Parse(queryStr)
-	if err != nil {
-		var unsup *parser.UnsupportedError
-		if errors.As(err, &unsup) {
-			writeError(ctx, fasthttp.StatusBadRequest, "bad_data",
-				"unsupported LogQL construct: "+unsup.Construct)
-		} else {
-			writeError(ctx, fasthttp.StatusBadRequest, "bad_data",
-				"invalid LogQL query: "+err.Error())
-		}
+	ast, ok := parseLogQLWithMetrics(ctx, queryStr)
+	if !ok {
 		return
 	}
 
-	// Translate to LogsQL.
-	result, err := translator.Translate(ast, translator.Options{
+	result, ok := translateQueryWithMetrics(ctx, ast, translator.Options{
 		LabelRemap:                d.Cfg.Labels.LabelRemap,
 		ServiceNameFallbackFields: d.Cfg.Labels.ServiceNameFallbackFields,
 	})
-	if err != nil {
-		writeError(ctx, fasthttp.StatusBadRequest, "bad_data", err.Error())
+	if !ok {
 		return
 	}
 
@@ -181,6 +171,7 @@ func (d *Deps) handleLogQuery(
 		// full result
 	case errors.Is(err, vlogs.ErrResponseTooLarge):
 		ctx.Response.Header.Set("X-Proxy-Truncated", "true")
+		metrics.IncResponseTruncated("query_logs_body_limit")
 		slog.Warn("QueryLogs response truncated: body size limit reached",
 			"logql", logql,
 			"logsql", result.LogsQL,
@@ -207,6 +198,7 @@ func (d *Deps) handleLogQuery(
 
 	if grouper.Truncated() {
 		ctx.Response.Header.Set("X-Proxy-Truncated", "true")
+		metrics.IncResponseTruncated("query_logs_stream_limit")
 	}
 
 	writeJSON(ctx, fasthttp.StatusOK, loki.StreamsResponse{
@@ -339,6 +331,7 @@ func (d *Deps) handleAggregationQuery(
 	case scanErr == nil:
 	case errors.Is(scanErr, vlogs.ErrResponseTooLarge):
 		ctx.Response.Header.Set("X-Proxy-Truncated", "true")
+		metrics.IncResponseTruncated("aggregation_body_limit")
 		slog.Warn("handleAggregationQuery: response truncated",
 			"logql", logql,
 			"logsql", result.LogsQL,

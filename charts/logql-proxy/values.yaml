@@ -48,6 +48,15 @@ service:
   port: 3100
   annotations: {}
 
+serviceMonitor:
+  enabled: true
+  labels: {}
+  annotations: {}
+  interval: 30s
+  scrapeTimeout: 10s
+  path: /metrics
+  honorLabels: false
+
 # ── Ingress (classic Kubernetes Ingress) ──────────────────────────────────────
 # Enable this OR httpRoute — both can coexist but are independent.
 ingress:

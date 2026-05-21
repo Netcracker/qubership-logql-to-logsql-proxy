@@ -16,6 +16,7 @@ import (
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/config"
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/limits"
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/loki"
+	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/metrics"
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/vlogs"
 )
 
@@ -101,8 +102,27 @@ func RecoveryMiddleware(next fasthttp.RequestHandler) fasthttp.RequestHandler {
 func LoggingMiddleware(next fasthttp.RequestHandler) fasthttp.RequestHandler {
 	return func(ctx *fasthttp.RequestCtx) {
 		start := time.Now()
+		route := normalizedRoute(string(ctx.Path()))
+		trackRequest := route != "/metrics"
+		if trackRequest {
+			metrics.IncHTTPInFlight(route)
+			defer metrics.DecHTTPInFlight(route)
+		}
+
 		next(ctx)
-		if string(ctx.Path()) == "/ready" {
+		duration := time.Since(start)
+
+		if trackRequest {
+			metrics.ObserveHTTPRequest(
+				string(ctx.Method()),
+				route,
+				ctx.Response.StatusCode(),
+				duration,
+				responseSizeBytes(ctx),
+			)
+		}
+
+		if route == "/ready" || route == "/metrics" {
 			return
 		}
 		slog.Info("request",
@@ -110,7 +130,7 @@ func LoggingMiddleware(next fasthttp.RequestHandler) fasthttp.RequestHandler {
 			"path", string(ctx.Path()),
 			"raw_query", string(ctx.URI().QueryString()),
 			"status", ctx.Response.StatusCode(),
-			"latency_ms", time.Since(start).Milliseconds(),
+			"latency_ms", duration.Milliseconds(),
 			"remote_addr", ctx.RemoteAddr().String(),
 		)
 	}
@@ -123,13 +143,21 @@ func LoggingMiddleware(next fasthttp.RequestHandler) fasthttp.RequestHandler {
 func ConcurrencyMiddleware(lim *limits.Limiter, requestTimeout time.Duration) func(fasthttp.RequestHandler) fasthttp.RequestHandler {
 	return func(next fasthttp.RequestHandler) fasthttp.RequestHandler {
 		return func(ctx *fasthttp.RequestCtx) {
+			path := string(ctx.Path())
+			if path == "/ready" || path == "/metrics" {
+				next(ctx)
+				return
+			}
+
 			if err := lim.Acquire(ctx); err != nil {
 				if errors.Is(err, limits.ErrQueueFull) {
+					metrics.IncLimiterRejection("queue_full")
 					ctx.Response.Header.Set("Retry-After", "1")
 					writeError(ctx, fasthttp.StatusTooManyRequests, "execution",
 						"too many concurrent queries; try again later")
 					return
 				}
+				metrics.IncLimiterRejection("context_cancelled")
 				writeError(ctx, fasthttp.StatusServiceUnavailable, "cancelled", err.Error())
 				return
 			}
@@ -142,6 +170,13 @@ func ConcurrencyMiddleware(lim *limits.Limiter, requestTimeout time.Duration) fu
 			next(ctx)
 		}
 	}
+}
+
+func responseSizeBytes(ctx *fasthttp.RequestCtx) int {
+	if n := ctx.Response.Header.ContentLength(); n >= 0 {
+		return n
+	}
+	return len(ctx.Response.Body())
 }
 
 // ────────────────────────────────────────────────────────────────────────────

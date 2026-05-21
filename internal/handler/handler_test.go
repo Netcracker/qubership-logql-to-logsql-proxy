@@ -3,6 +3,7 @@ package handler_test
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -168,6 +169,34 @@ func TestReady(t *testing.T) {
 	defer closeRespBody(t, resp)
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestMetricsEndpoint(t *testing.T) {
+	addr, cleanup := newTestServer(t, buildHandler(newDeps(&mockVL{})))
+	defer cleanup()
+
+	resp, err := http.Get(addr + "/metrics")
+	if err != nil {
+		t.Fatalf("GET /metrics: %v", err)
+	}
+	defer closeRespBody(t, resp)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+
+	text := string(body)
+	if !strings.Contains(text, "logql_proxy_http_requests_total") {
+		t.Fatalf("expected proxy http metric in /metrics output")
+	}
+	if !strings.Contains(text, "go_goroutines") {
+		t.Fatalf("expected Go collector metric in /metrics output")
 	}
 }
 
