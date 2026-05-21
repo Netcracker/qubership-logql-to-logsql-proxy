@@ -651,7 +651,7 @@ func TestHandleMetricQueryAndParseRecordTime(t *testing.T) {
 	}
 
 	ctx := newCtx(`/loki/api/v1/query_range`)
-	deps.handleMetricQuery(ctx, result, ast, time.Unix(1705320000, 0).UTC(), time.Unix(1705323600, 0).UTC(), 0)
+	deps.handleMetricQuery(ctx, `rate({app="api"}[5m])`, result, ast, time.Unix(1705320000, 0).UTC(), time.Unix(1705323600, 0).UTC(), 0)
 	if ctx.Response.StatusCode() != fasthttp.StatusOK {
 		t.Fatalf("handleMetricQuery status = %d, want 200", ctx.Response.StatusCode())
 	}

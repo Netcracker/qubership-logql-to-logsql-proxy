@@ -128,12 +128,24 @@ func (d *Deps) IndexVolume(ctx *fasthttp.RequestCtx) {
 	case errors.Is(scanErr, vlogs.ErrResponseTooLarge):
 		ctx.Response.Header.Set("X-Proxy-Truncated", "true")
 		slog.Warn("IndexVolume: response truncated by body size limit",
-			"logsql", xlat.LogsQL)
+			"logql", queryStr,
+			"logsql", xlat.LogsQL,
+			"start", start,
+			"end", end,
+			"limit", d.Cfg.Limits.MaxLimit,
+		)
 	case errors.Is(scanErr, context.Canceled), errors.Is(scanErr, context.DeadlineExceeded):
 		writeError(ctx, fasthttp.StatusGatewayTimeout, "timeout", "query timed out")
 		return
 	default:
-		slog.Error("IndexVolume QueryLogs failed", "logsql", xlat.LogsQL, "err", scanErr)
+		slog.Error("IndexVolume QueryLogs failed",
+			"logql", queryStr,
+			"logsql", xlat.LogsQL,
+			"start", start,
+			"end", end,
+			"limit", d.Cfg.Limits.MaxLimit,
+			"err", scanErr,
+		)
 		writeError(ctx, fasthttp.StatusBadGateway, "execution",
 			"VictoriaLogs query failed: "+scanErr.Error())
 		return

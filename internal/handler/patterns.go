@@ -129,12 +129,26 @@ func (d *Deps) Patterns(ctx *fasthttp.RequestCtx) {
 	case errors.Is(scanErr, vlogs.ErrResponseTooLarge):
 		ctx.Response.Header.Set("X-Proxy-Truncated", "true")
 		slog.Warn("Patterns: response truncated by body size limit",
-			"logsql", logsqlQuery)
+			"logql", queryStr,
+			"logsql", logsqlQuery,
+			"start", start,
+			"end", end,
+			"step", step,
+			"limit", d.Cfg.Limits.MaxLimit,
+		)
 	case errors.Is(scanErr, context.Canceled), errors.Is(scanErr, context.DeadlineExceeded):
 		writeError(ctx, fasthttp.StatusGatewayTimeout, "timeout", "query timed out")
 		return
 	default:
-		slog.Error("Patterns QueryLogs failed", "logsql", logsqlQuery, "err", scanErr)
+		slog.Error("Patterns QueryLogs failed",
+			"logql", queryStr,
+			"logsql", logsqlQuery,
+			"start", start,
+			"end", end,
+			"step", step,
+			"limit", d.Cfg.Limits.MaxLimit,
+			"err", scanErr,
+		)
 		writeError(ctx, fasthttp.StatusBadGateway, "execution",
 			"VictoriaLogs query failed: "+scanErr.Error())
 		return

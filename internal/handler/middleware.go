@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"strconv"
 	"time"
 
@@ -77,7 +78,12 @@ func RecoveryMiddleware(next fasthttp.RequestHandler) fasthttp.RequestHandler {
 	return func(ctx *fasthttp.RequestCtx) {
 		defer func() {
 			if rec := recover(); rec != nil {
-				slog.Error("handler panic", "recover", rec, "path", string(ctx.Path()))
+				slog.Error("handler panic",
+					"recover", rec,
+					"path", string(ctx.Path()),
+					"raw_query", string(ctx.URI().QueryString()),
+					"stacktrace", string(debug.Stack()),
+				)
 				writeError(ctx, fasthttp.StatusInternalServerError, "server_error", "internal server error")
 			}
 		}()

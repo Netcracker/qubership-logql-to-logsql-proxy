@@ -51,9 +51,14 @@ func (d *Deps) Labels(ctx *fasthttp.RequestCtx) {
 		End:   end,
 	})
 	if err != nil {
-		slog.Error("FieldNames failed", "err", err)
+		slog.Error("FieldNames failed",
+			"query", "*",
+			"start", start,
+			"end", end,
+			"err", err,
+		)
 		writeError(ctx, fasthttp.StatusBadGateway, "execution",
-			"failed to retrieve label names from VictoriaLogs")
+			"VictoriaLogs field_names query failed: "+err.Error())
 		return
 	}
 
@@ -108,9 +113,14 @@ func (d *Deps) DetectedLabels(ctx *fasthttp.RequestCtx) {
 		End:   end,
 	})
 	if err != nil {
-		slog.Error("FieldNames failed (detected_labels)", "err", err)
+		slog.Error("FieldNames failed (detected_labels)",
+			"query", "*",
+			"start", start,
+			"end", end,
+			"err", err,
+		)
 		writeError(ctx, fasthttp.StatusBadGateway, "execution",
-			"failed to retrieve label names from VictoriaLogs")
+			"VictoriaLogs field_names query failed: "+err.Error())
 		return
 	}
 
@@ -167,9 +177,14 @@ func (d *Deps) DetectedFields(ctx *fasthttp.RequestCtx) {
 		End:   end,
 	})
 	if err != nil {
-		slog.Error("FieldNames failed (detected_fields)", "err", err)
+		slog.Error("FieldNames failed (detected_fields)",
+			"query", logsqlFilter,
+			"start", start,
+			"end", end,
+			"err", err,
+		)
 		writeError(ctx, fasthttp.StatusBadGateway, "execution",
-			"failed to retrieve field names from VictoriaLogs")
+			"VictoriaLogs field_names query failed: "+err.Error())
 		return
 	}
 

@@ -29,6 +29,10 @@ func (d *Deps) Series(ctx *fasthttp.RequestCtx) {
 	}
 
 	logsql := d.seriesFilter(ctx)
+	match := string(ctx.QueryArgs().Peek("match[]"))
+	if match == "" {
+		match = "*"
+	}
 
 	grouper := loki.NewStreamGrouper(d.Cfg.Labels.KnownLabels, d.Cfg.Limits.MaxStreamsPerResponse)
 
@@ -40,7 +44,14 @@ func (d *Deps) Series(ctx *fasthttp.RequestCtx) {
 	}, grouper.Add)
 
 	if err != nil && !isLargeOrCancelled(err) {
-		slog.Error("Series QueryLogs failed", "err", err)
+		slog.Error("Series QueryLogs failed",
+			"logql", match,
+			"logsql", logsql,
+			"start", start,
+			"end", end,
+			"limit", d.Cfg.Limits.MaxStreamsPerResponse,
+			"err", err,
+		)
 		writeError(ctx, fasthttp.StatusBadGateway, "execution",
 			"failed to query streams from VictoriaLogs")
 		return

@@ -47,9 +47,16 @@ func (d *Deps) LabelValues(ctx *fasthttp.RequestCtx) {
 		Limit:     d.Cfg.Limits.MaxLimit,
 	})
 	if err != nil {
-		slog.Error("FieldValues failed", "label", name, "err", err)
+		slog.Error("FieldValues failed",
+			"label", name,
+			"query", "*",
+			"start", start,
+			"end", end,
+			"limit", d.Cfg.Limits.MaxLimit,
+			"err", err,
+		)
 		writeError(ctx, fasthttp.StatusBadGateway, "execution",
-			"failed to retrieve label values from VictoriaLogs")
+			"VictoriaLogs field_values query failed: "+err.Error())
 		return
 	}
 
@@ -102,9 +109,17 @@ func (d *Deps) DetectedFieldValues(ctx *fasthttp.RequestCtx) {
 		Limit:     d.Cfg.Limits.MaxLimit,
 	})
 	if err != nil {
-		slog.Error("FieldValues failed (detected_field_values)", "field", name, "mappedField", fieldName, "err", err)
+		slog.Error("FieldValues failed (detected_field_values)",
+			"field", name,
+			"mappedField", fieldName,
+			"query", logsqlFilter,
+			"start", start,
+			"end", end,
+			"limit", d.Cfg.Limits.MaxLimit,
+			"err", err,
+		)
 		writeError(ctx, fasthttp.StatusBadGateway, "execution",
-			"failed to retrieve field values from VictoriaLogs")
+			"VictoriaLogs field_values query failed: "+err.Error())
 		return
 	}
 
