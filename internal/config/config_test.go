@@ -193,6 +193,99 @@ func TestLoadAllowsExplicitAggregationScanLimitFromConfig(t *testing.T) {
 	}
 }
 
+func TestLoadAllowsExplicitDrilldownLimitsFromConfig(t *testing.T) {
+	cfgFile, err := os.CreateTemp(t.TempDir(), "config-*.yaml")
+	if err != nil {
+		t.Fatalf("CreateTemp(config): %v", err)
+	}
+	cfgYAML := strings.Join([]string{
+		"vlogs:",
+		"  url: http://victorialogs:9428",
+		"drilldownLimits:",
+		"  discoverServiceName:",
+		"    - service_name",
+		"    - app",
+		"  logLevelFields:",
+		"    - detected_level",
+		"  maxEntriesLimitPerQuery: 2048",
+		"  maxQuerySeries: 900",
+		"  queryTimeout: 45s",
+		"  volumeMaxSeries: 123456",
+		"  version: custom",
+		"",
+	}, "\n")
+	if _, err := cfgFile.WriteString(cfgYAML); err != nil {
+		t.Fatalf("WriteString(config): %v", err)
+	}
+	if err := cfgFile.Close(); err != nil {
+		t.Fatalf("Close(config): %v", err)
+	}
+
+	cfg, err := Load(cfgFile.Name())
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+
+	if got := cfg.DrilldownLimits.DiscoverServiceName; len(got) != 2 || got[0] != "service_name" || got[1] != "app" {
+		t.Fatalf("DiscoverServiceName = %v, want [service_name app]", got)
+	}
+	if got := cfg.DrilldownLimits.LogLevelFields; len(got) != 1 || got[0] != "detected_level" {
+		t.Fatalf("LogLevelFields = %v, want [detected_level]", got)
+	}
+	if cfg.DrilldownLimits.MaxEntriesLimitPerQuery != 2048 {
+		t.Fatalf("MaxEntriesLimitPerQuery = %d, want 2048", cfg.DrilldownLimits.MaxEntriesLimitPerQuery)
+	}
+	if cfg.DrilldownLimits.MaxQuerySeries != 900 {
+		t.Fatalf("MaxQuerySeries = %d, want 900", cfg.DrilldownLimits.MaxQuerySeries)
+	}
+	if cfg.DrilldownLimits.QueryTimeout != "45s" {
+		t.Fatalf("QueryTimeout = %q, want 45s", cfg.DrilldownLimits.QueryTimeout)
+	}
+	if cfg.DrilldownLimits.VolumeMaxSeries != 123456 {
+		t.Fatalf("VolumeMaxSeries = %d, want 123456", cfg.DrilldownLimits.VolumeMaxSeries)
+	}
+	if cfg.DrilldownLimits.Version != "custom" {
+		t.Fatalf("Version = %q, want custom", cfg.DrilldownLimits.Version)
+	}
+}
+
+func TestLoadDefaultsDrilldownLimitsFromRuntimeLimits(t *testing.T) {
+	cfgFile, err := os.CreateTemp(t.TempDir(), "config-*.yaml")
+	if err != nil {
+		t.Fatalf("CreateTemp(config): %v", err)
+	}
+	cfgYAML := strings.Join([]string{
+		"vlogs:",
+		"  url: http://victorialogs:9428",
+		"  timeout: 45s",
+		"limits:",
+		"  maxLimit: 2048",
+		"  maxStreamsPerResponse: 321",
+		"",
+	}, "\n")
+	if _, err := cfgFile.WriteString(cfgYAML); err != nil {
+		t.Fatalf("WriteString(config): %v", err)
+	}
+	if err := cfgFile.Close(); err != nil {
+		t.Fatalf("Close(config): %v", err)
+	}
+
+	cfg, err := Load(cfgFile.Name())
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+
+	if cfg.DrilldownLimits.MaxEntriesLimitPerQuery != 2048 {
+		t.Fatalf("MaxEntriesLimitPerQuery = %d, want 2048", cfg.DrilldownLimits.MaxEntriesLimitPerQuery)
+	}
+	if cfg.DrilldownLimits.MaxQuerySeries != 321 {
+		t.Fatalf("MaxQuerySeries = %d, want 321", cfg.DrilldownLimits.MaxQuerySeries)
+	}
+	if cfg.DrilldownLimits.QueryTimeout != "45s" {
+		t.Fatalf("QueryTimeout = %q, want 45s", cfg.DrilldownLimits.QueryTimeout)
+	}
+}
+
 func TestLoadAllowsExplicitLabelAndFieldFiltersFromConfig(t *testing.T) {
 	cfgFile, err := os.CreateTemp(t.TempDir(), "config-*.yaml")
 	if err != nil {

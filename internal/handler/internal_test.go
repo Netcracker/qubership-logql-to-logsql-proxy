@@ -69,6 +69,23 @@ func testDeps(vl vlogs.VLogsClient) *Deps {
 	cfg.Labels.MetadataCacheTTL = time.Minute
 	cfg.Labels.MetadataCacheSize = 16
 	cfg.Labels.LabelRemap = map[string]string{"detected_level": "level"}
+	cfg.DrilldownLimits.DiscoverLogLevels = true
+	cfg.DrilldownLimits.DiscoverServiceName = []string{"service", "app", "application"}
+	cfg.DrilldownLimits.LogLevelFields = []string{"level", "severity"}
+	cfg.DrilldownLimits.MaxEntriesLimitPerQuery = 5000
+	cfg.DrilldownLimits.MaxQueryBytesRead = "0B"
+	cfg.DrilldownLimits.MaxQueryLength = "30d1h"
+	cfg.DrilldownLimits.MaxQueryLookback = "31d"
+	cfg.DrilldownLimits.MaxQueryRange = "0s"
+	cfg.DrilldownLimits.MaxQuerySeries = 500
+	cfg.DrilldownLimits.MetricAggregationEnabled = true
+	cfg.DrilldownLimits.OTLPResourceAttributes = []string{"service.name", "k8s.namespace.name"}
+	cfg.DrilldownLimits.QueryTimeout = "5m"
+	cfg.DrilldownLimits.RetentionPeriod = "31d"
+	cfg.DrilldownLimits.VolumeEnabled = true
+	cfg.DrilldownLimits.VolumeMaxSeries = 100000000
+	cfg.DrilldownLimits.PatternIngesterEnabled = true
+	cfg.DrilldownLimits.Version = "fake"
 	return &Deps{
 		Cfg:   cfg,
 		VL:    vl,

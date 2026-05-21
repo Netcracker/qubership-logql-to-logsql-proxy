@@ -71,3 +71,42 @@ labels:
 log:
   level: "info"
   format: "json"
+
+drilldownLimits:
+  # Returned to Grafana as discover_log_levels.
+  discoverLogLevels: true
+  # Ordered candidate fields Grafana may use to infer service names in Drilldown.
+  discoverServiceName:
+    - service
+    - app
+    - application
+  # Field names Grafana should treat as level/severity fields.
+  logLevelFields:
+    - detected_level
+    - level
+    - severity
+  # Defaults to limits.maxLimit when omitted.
+  maxEntriesLimitPerQuery: 5000
+  maxLineSizeTruncate: false
+  maxQueryBytesRead: "0B"
+  maxQueryLength: "30d1h"
+  maxQueryLookback: "31d"
+  maxQueryRange: "0s"
+  # Defaults to limits.maxStreamsPerResponse when omitted.
+  maxQuerySeries: 500
+  metricAggregationEnabled: true
+  # OTLP resource attributes advertised as indexed metadata for Drilldown.
+  otlpResourceAttributes:
+    - service.name
+    - k8s.namespace.name
+    - k8s.pod.name
+  patternPersistenceEnabled: false
+  # Defaults to vlogs.timeout when omitted.
+  queryTimeout: "5m"
+  # Retention period reported to Grafana.
+  retentionPeriod: "31d"
+  # Enables volume panels and sets the advertised series cap.
+  volumeEnabled: true
+  volumeMaxSeries: 100000000
+  patternIngesterEnabled: true
+  version: "fake"

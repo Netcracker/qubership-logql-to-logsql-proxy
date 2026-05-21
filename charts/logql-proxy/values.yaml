@@ -243,6 +243,86 @@ proxy:
     metadataCacheTTL: "5m"
     metadataCacheSize: 256
 
+  drilldownLimits:
+    # Returned as discover_log_levels in /loki/api/v1/drilldown-limits.
+    # Keep enabled when Grafana should build level-based histograms and filters.
+    discoverLogLevels: true
+    # Ordered candidate fields Grafana may treat as service-name sources in Drilldown.
+    discoverServiceName:
+      - service
+      - app
+      - application
+      - app_name
+      - name
+      - app_kubernetes_io_name
+      - container
+      - container_name
+      - k8s_container_name
+      - component
+      - workload
+      - job
+      - k8s_job_name
+    # Field names Grafana should interpret as log-level / severity fields.
+    logLevelFields:
+      - detected_level
+      - level
+      - severity
+      - LEVEL
+      - Level
+      - log.level
+      - SEVERITY
+      - Severity
+      - SeverityText
+      - lvl
+      - LVL
+      - Lvl
+      - severity_text
+      - Severity_Text
+      - SEVERITY_TEXT
+    # Defaults conceptually align with proxy.limits.maxLimit.
+    maxEntriesLimitPerQuery: 5000
+    maxLineSizeTruncate: false
+    maxQueryBytesRead: "0B"
+    maxQueryLength: "30d1h"
+    maxQueryLookback: "31d"
+    maxQueryRange: "0s"
+    # Defaults conceptually align with proxy.limits.maxStreamsPerResponse.
+    maxQuerySeries: 500
+    metricAggregationEnabled: true
+    # OTLP resource attributes advertised to Grafana as indexed metadata.
+    otlpResourceAttributes:
+      - service.name
+      - service.namespace
+      - service.instance.id
+      - deployment.environment
+      - cloud.region
+      - cloud.availability_zone
+      - k8s.cluster.name
+      - k8s.namespace.name
+      - k8s.pod.name
+      - k8s.container.name
+      - container.name
+      - k8s.replicaset.name
+      - k8s.deployment.name
+      - k8s.statefulset.name
+      - k8s.daemonset.name
+      - k8s.cronjob.name
+      - k8s.job.name
+      - app_id
+      - app_key
+      - kind
+      - deployment.environment.name
+    patternPersistenceEnabled: false
+    # Defaults conceptually align with proxy.vlogs.timeout.
+    queryTimeout: "5m"
+    # Reported data-retention period shown to Grafana.
+    retentionPeriod: "31d"
+    # Enables Log Volume panels in Drilldown and caps their series count.
+    volumeEnabled: true
+    volumeMaxSeries: 100000000
+    patternIngesterEnabled: true
+    version: "fake"
+
   log:
     level: "info"    # debug | info | warn | error
     format: "json"   # json | text

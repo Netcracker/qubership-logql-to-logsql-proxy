@@ -106,6 +106,30 @@ flowchart TD
   SHAPE -->|Loki JSON| G
 ```
 
+## Drilldown Limits Config
+
+`GET /loki/api/v1/drilldown-limits` is a read-only endpoint used by Grafana
+Logs Drilldown. The proxy does not accept configuration through this endpoint;
+instead, it returns values from the proxy config under `drilldownLimits`.
+
+The most useful parameters are:
+
+- `discoverLogLevels`: enables Grafana's automatic log-level discovery UI
+- `discoverServiceName`: ordered list of field names Grafana may use when
+  discovering a service name
+- `logLevelFields`: field names Grafana should treat as level/severity fields
+- `maxEntriesLimitPerQuery`: entry cap reported to Grafana for Drilldown log
+  queries. When omitted, defaults to `limits.maxLimit`
+- `maxQuerySeries`: series cap reported to Grafana for Drilldown charts. When
+  omitted, defaults to `limits.maxStreamsPerResponse`
+- `queryTimeout`: timeout reported to Grafana for Drilldown queries. When
+  omitted, defaults to `vlogs.timeout`
+- `volumeEnabled` / `volumeMaxSeries`: controls whether volume panels are
+  enabled and how many series Grafana may request
+
+The remaining `drilldownLimits` fields mirror Loki's response shape and are
+meant for fine-tuning Grafana compatibility.
+
 ## TODO
 
 ### Improvements
@@ -115,7 +139,7 @@ flowchart TD
 - [ ] Add metrics
 - [ ] Improve logs to show original errors
 - [ ] Measure performance and resource usage
-- [ ] Make response for `drilldown-limits` configurable
+- [x] Make response for `drilldown-limits` configurable
 - [ ] Check the logql-to-logsql translator
       [https://github.com/VictoriaMetrics-community/logql-to-logsql/](https://github.com/VictoriaMetrics-community/logql-to-logsql/)
       and maybe reuse it

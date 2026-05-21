@@ -85,6 +85,23 @@ func defaultConfig() *config.Config {
 	cfg.Limits.DefaultLimit = 1000
 	cfg.Labels.MetadataCacheTTL = 5 * time.Minute
 	cfg.Labels.MetadataCacheSize = 256
+	cfg.DrilldownLimits.DiscoverLogLevels = true
+	cfg.DrilldownLimits.DiscoverServiceName = []string{"service", "app", "application"}
+	cfg.DrilldownLimits.LogLevelFields = []string{"level", "severity"}
+	cfg.DrilldownLimits.MaxEntriesLimitPerQuery = 5000
+	cfg.DrilldownLimits.MaxQueryBytesRead = "0B"
+	cfg.DrilldownLimits.MaxQueryLength = "30d1h"
+	cfg.DrilldownLimits.MaxQueryLookback = "31d"
+	cfg.DrilldownLimits.MaxQueryRange = "0s"
+	cfg.DrilldownLimits.MaxQuerySeries = 500
+	cfg.DrilldownLimits.MetricAggregationEnabled = true
+	cfg.DrilldownLimits.OTLPResourceAttributes = []string{"service.name", "k8s.namespace.name"}
+	cfg.DrilldownLimits.QueryTimeout = "5m"
+	cfg.DrilldownLimits.RetentionPeriod = "31d"
+	cfg.DrilldownLimits.VolumeEnabled = true
+	cfg.DrilldownLimits.VolumeMaxSeries = 100000000
+	cfg.DrilldownLimits.PatternIngesterEnabled = true
+	cfg.DrilldownLimits.Version = "fake"
 	cfg.Log.Level = "info"
 	cfg.Log.Format = "json"
 	return cfg
@@ -1044,11 +1061,21 @@ func TestIndexVolumeBadQuery(t *testing.T) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// /loki/api/v1/drilldown-limits stub
+// /loki/api/v1/drilldown-limits
 // ────────────────────────────────────────────────────────────────────────────
 
-func TestDrilldownLimitsStub(t *testing.T) {
-	addr, cleanup := newTestServer(t, buildHandler(newDeps(&mockVL{})))
+func TestDrilldownLimitsUsesConfiguredResponse(t *testing.T) {
+	deps := newDeps(&mockVL{})
+	deps.Cfg.DrilldownLimits.DiscoverServiceName = []string{"service_name", "app"}
+	deps.Cfg.DrilldownLimits.LogLevelFields = []string{"detected_level", "level"}
+	deps.Cfg.DrilldownLimits.MaxEntriesLimitPerQuery = 1234
+	deps.Cfg.DrilldownLimits.MaxQuerySeries = 42
+	deps.Cfg.DrilldownLimits.QueryTimeout = "30s"
+	deps.Cfg.DrilldownLimits.VolumeMaxSeries = 77
+	deps.Cfg.DrilldownLimits.OTLPResourceAttributes = []string{"service.name", "container.name", "app_id"}
+	deps.Cfg.DrilldownLimits.Version = "configured"
+
+	addr, cleanup := newTestServer(t, buildHandler(deps))
 	defer cleanup()
 
 	resp, err := http.Get(addr + "/loki/api/v1/drilldown-limits")
@@ -1062,6 +1089,52 @@ func TestDrilldownLimitsStub(t *testing.T) {
 	}
 	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "application/json") {
 		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+
+	var body struct {
+		Limits struct {
+			DiscoverServiceName     []string `json:"discover_service_name"`
+			LogLevelFields          []string `json:"log_level_fields"`
+			MaxEntriesLimitPerQuery int      `json:"max_entries_limit_per_query"`
+			MaxQuerySeries          int      `json:"max_query_series"`
+			QueryTimeout            string   `json:"query_timeout"`
+			VolumeMaxSeries         int      `json:"volume_max_series"`
+			OTLPConfig              struct {
+				ResourceAttributes struct {
+					AttributesConfig []struct {
+						Attributes []string `json:"attributes"`
+					} `json:"attributes_config"`
+				} `json:"resource_attributes"`
+			} `json:"otlp_config"`
+		} `json:"limits"`
+		Version string `json:"version"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got := body.Limits.DiscoverServiceName; len(got) != 2 || got[0] != "service_name" || got[1] != "app" {
+		t.Fatalf("discover_service_name = %v, want [service_name app]", got)
+	}
+	if got := body.Limits.LogLevelFields; len(got) != 2 || got[0] != "detected_level" || got[1] != "level" {
+		t.Fatalf("log_level_fields = %v, want [detected_level level]", got)
+	}
+	if body.Limits.MaxEntriesLimitPerQuery != 1234 {
+		t.Fatalf("max_entries_limit_per_query = %d, want 1234", body.Limits.MaxEntriesLimitPerQuery)
+	}
+	if body.Limits.MaxQuerySeries != 42 {
+		t.Fatalf("max_query_series = %d, want 42", body.Limits.MaxQuerySeries)
+	}
+	if body.Limits.QueryTimeout != "30s" {
+		t.Fatalf("query_timeout = %q, want 30s", body.Limits.QueryTimeout)
+	}
+	if body.Limits.VolumeMaxSeries != 77 {
+		t.Fatalf("volume_max_series = %d, want 77", body.Limits.VolumeMaxSeries)
+	}
+	if got := body.Limits.OTLPConfig.ResourceAttributes.AttributesConfig; len(got) != 1 || len(got[0].Attributes) != 3 {
+		t.Fatalf("otlp attributes = %+v, want one entry with three attributes", got)
+	}
+	if body.Version != "configured" {
+		t.Fatalf("version = %q, want configured", body.Version)
 	}
 }
 
