@@ -64,8 +64,8 @@ ingress:
   # Ingress class name (e.g. "nginx", "traefik"). Leave empty to use cluster default.
   className: ""
   annotations: {}
-    # nginx.ingress.kubernetes.io/rewrite-target: /
-    # cert-manager.io/cluster-issuer: letsencrypt-prod
+  # nginx.ingress.kubernetes.io/rewrite-target: /
+  # cert-manager.io/cluster-issuer: letsencrypt-prod
   hosts:
     - host: logql-proxy.example.com
       paths:
