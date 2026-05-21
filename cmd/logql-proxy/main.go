@@ -80,10 +80,11 @@ func main() {
 	// ── Start HTTP server ───────────────────────────────────────────────────
 
 	srv := &fasthttp.Server{
-		Handler:      h,
-		ReadTimeout:  cfg.Server.ReadTimeout,
-		WriteTimeout: cfg.Server.WriteTimeout,
-		IdleTimeout:  cfg.Server.IdleTimeout,
+		Handler:        h,
+		ReadTimeout:    cfg.Server.ReadTimeout,
+		WriteTimeout:   cfg.Server.WriteTimeout,
+		IdleTimeout:    cfg.Server.IdleTimeout,
+		ReadBufferSize: cfg.Server.ReadBufferSize,
 	}
 
 	// Start server in a goroutine so we can listen for shutdown signals.

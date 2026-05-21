@@ -59,6 +59,9 @@ func TestLoadAppliesDefaultsFileEnvAndPasswordFile(t *testing.T) {
 	if cfg.Server.ReadTimeout != 30*time.Second {
 		t.Errorf("ReadTimeout = %v, want %v", cfg.Server.ReadTimeout, 30*time.Second)
 	}
+	if cfg.Server.ReadBufferSize != 64*1024 {
+		t.Errorf("ReadBufferSize = %d, want %d", cfg.Server.ReadBufferSize, 64*1024)
+	}
 	if cfg.VLogs.URL != "http://victorialogs:9428" {
 		t.Errorf("VLogs.URL = %q, want %q", cfg.VLogs.URL, "http://victorialogs:9428")
 	}
@@ -350,6 +353,35 @@ func TestLoadReturnsConversionErrorForInvalidDuration(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `server.readTimeout: invalid duration "nope"`) {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadAllowsExplicitReadBufferSizeFromConfig(t *testing.T) {
+	cfgFile, err := os.CreateTemp(t.TempDir(), "config-*.yaml")
+	if err != nil {
+		t.Fatalf("CreateTemp(config): %v", err)
+	}
+	cfgYAML := strings.Join([]string{
+		"vlogs:",
+		"  url: http://victorialogs:9428",
+		"server:",
+		"  readBufferSize: 131072",
+		"",
+	}, "\n")
+	if _, err := cfgFile.WriteString(cfgYAML); err != nil {
+		t.Fatalf("WriteString(config): %v", err)
+	}
+	if err := cfgFile.Close(); err != nil {
+		t.Fatalf("Close(config): %v", err)
+	}
+
+	cfg, err := Load(cfgFile.Name())
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+
+	if cfg.Server.ReadBufferSize != 131072 {
+		t.Fatalf("ReadBufferSize = %d, want 131072", cfg.Server.ReadBufferSize)
 	}
 }
 

@@ -38,6 +38,7 @@ type ServerConfig struct {
 	WriteTimeout    time.Duration // default: 60s
 	IdleTimeout     time.Duration // default: 90s
 	GracefulTimeout time.Duration // default: 15s
+	ReadBufferSize  int           // default: 64 KiB
 }
 
 // VLogsConfig controls outbound connections to VictoriaLogs.
@@ -171,6 +172,7 @@ type rawServerConfig struct {
 	WriteTimeout    string `yaml:"writeTimeout"`
 	IdleTimeout     string `yaml:"idleTimeout"`
 	GracefulTimeout string `yaml:"gracefulTimeout"`
+	ReadBufferSize  int    `yaml:"readBufferSize"`
 }
 
 type rawVLogsConfig struct {
@@ -252,6 +254,7 @@ func defaultRaw() *rawConfig {
 	r.Server.WriteTimeout = "60s"
 	r.Server.IdleTimeout = "90s"
 	r.Server.GracefulTimeout = "15s"
+	r.Server.ReadBufferSize = 64 * 1024
 	r.VLogs.Timeout = "30s"
 	r.VLogs.MaxIdleConns = 100
 	r.VLogs.MaxConnsPerHost = 50
@@ -410,6 +413,7 @@ func applyEnv(r *rawConfig) {
 	envStr("PROXY_SERVER_WRITETIMEOUT", &r.Server.WriteTimeout)
 	envStr("PROXY_SERVER_IDLETIMEOUT", &r.Server.IdleTimeout)
 	envStr("PROXY_SERVER_GRACEFULTIMEOUT", &r.Server.GracefulTimeout)
+	envInt("PROXY_SERVER_READBUFFERSIZE", &r.Server.ReadBufferSize)
 
 	// VLogs
 	envStr("PROXY_VLOGS_URL", &r.VLogs.URL)
@@ -500,6 +504,7 @@ func convert(r *rawConfig) (*Config, error) {
 			WriteTimeout:    dur(r.Server.WriteTimeout, "server.writeTimeout"),
 			IdleTimeout:     dur(r.Server.IdleTimeout, "server.idleTimeout"),
 			GracefulTimeout: dur(r.Server.GracefulTimeout, "server.gracefulTimeout"),
+			ReadBufferSize:  r.Server.ReadBufferSize,
 		},
 		VLogs: VLogsConfig{
 			URL:             r.VLogs.URL,
@@ -593,6 +598,9 @@ func validate(cfg *Config) error {
 
 	if cfg.VLogs.URL == "" {
 		errs = append(errs, errors.New("vlogs.url is required"))
+	}
+	if cfg.Server.ReadBufferSize < 1 {
+		errs = append(errs, errors.New("server.readBufferSize must be >= 1"))
 	}
 	if cfg.VLogs.BasicAuth != nil && cfg.VLogs.BearerToken != "" {
 		errs = append(errs, errors.New("vlogs.basicAuth and vlogs.bearerToken are mutually exclusive"))

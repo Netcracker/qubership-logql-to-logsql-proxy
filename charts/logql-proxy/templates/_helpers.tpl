@@ -89,6 +89,7 @@ server:
   writeTimeout: {{ .Values.proxy.server.writeTimeout | quote }}
   idleTimeout: {{ .Values.proxy.server.idleTimeout | quote }}
   gracefulTimeout: {{ .Values.proxy.server.gracefulTimeout | quote }}
+  readBufferSize: {{ .Values.proxy.server.readBufferSize }}
 
 vlogs:
   url: {{ .Values.proxy.vlogs.url | quote }}

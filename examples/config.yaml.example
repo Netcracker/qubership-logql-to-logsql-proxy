@@ -1,6 +1,9 @@
 server:
   listenAddr: ":3100"
   writeTimeout: 60s
+  # Increase if Grafana sends long query strings and the proxy returns 431
+  # "Too big request header".
+  readBufferSize: 65536
 
 vlogs:
   url: "http://victorialogs:9428"
