@@ -155,26 +155,5 @@ log:
   format: {{ .Values.proxy.log.format | quote }}
 
 drilldownLimits:
-  discoverLogLevels: {{ .Values.proxy.drilldownLimits.discoverLogLevels }}
-  discoverServiceName:
-    {{- toYaml .Values.proxy.drilldownLimits.discoverServiceName | nindent 4 }}
-  logLevelFields:
-    {{- toYaml .Values.proxy.drilldownLimits.logLevelFields | nindent 4 }}
-  maxEntriesLimitPerQuery: {{ .Values.proxy.drilldownLimits.maxEntriesLimitPerQuery }}
-  maxLineSizeTruncate: {{ .Values.proxy.drilldownLimits.maxLineSizeTruncate }}
-  maxQueryBytesRead: {{ .Values.proxy.drilldownLimits.maxQueryBytesRead | quote }}
-  maxQueryLength: {{ .Values.proxy.drilldownLimits.maxQueryLength | quote }}
-  maxQueryLookback: {{ .Values.proxy.drilldownLimits.maxQueryLookback | quote }}
-  maxQueryRange: {{ .Values.proxy.drilldownLimits.maxQueryRange | quote }}
-  maxQuerySeries: {{ .Values.proxy.drilldownLimits.maxQuerySeries }}
-  metricAggregationEnabled: {{ .Values.proxy.drilldownLimits.metricAggregationEnabled }}
-  otlpResourceAttributes:
-    {{- toYaml .Values.proxy.drilldownLimits.otlpResourceAttributes | nindent 4 }}
-  patternPersistenceEnabled: {{ .Values.proxy.drilldownLimits.patternPersistenceEnabled }}
-  queryTimeout: {{ .Values.proxy.drilldownLimits.queryTimeout | quote }}
-  retentionPeriod: {{ .Values.proxy.drilldownLimits.retentionPeriod | quote }}
-  volumeEnabled: {{ .Values.proxy.drilldownLimits.volumeEnabled }}
-  volumeMaxSeries: {{ .Values.proxy.drilldownLimits.volumeMaxSeries }}
-  patternIngesterEnabled: {{ .Values.proxy.drilldownLimits.patternIngesterEnabled }}
-  version: {{ .Values.proxy.drilldownLimits.version | quote }}
+  {{- toYaml .Values.proxy.drilldownLimits | nindent 2 }}
 {{- end }}
