@@ -446,6 +446,86 @@ func TestParseAndTranslateWithMetrics(t *testing.T) {
 	}
 }
 
+func TestParseLogQLWithMetricsInvalidQuery(t *testing.T) {
+	var ctx fasthttp.RequestCtx
+
+	ast, ok := parseLogQLWithMetrics(&ctx, `{app="api"`)
+	if ok {
+		t.Fatalf("expected invalid query to fail, got AST %#v", ast)
+	}
+	if ctx.Response.StatusCode() != fasthttp.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", ctx.Response.StatusCode(), fasthttp.StatusBadRequest)
+	}
+	body := string(ctx.Response.Body())
+	if !strings.Contains(body, `"errorType":"bad_data"`) || !strings.Contains(body, "invalid LogQL query") {
+		t.Fatalf("unexpected error body: %s", body)
+	}
+}
+
+func TestParseLogQLWithMetricsUnsupportedQuery(t *testing.T) {
+	var ctx fasthttp.RequestCtx
+
+	ast, ok := parseLogQLWithMetrics(&ctx, `{app="api"} | line_format "{{.msg}}"`)
+	if ok {
+		t.Fatalf("expected unsupported query to fail, got AST %#v", ast)
+	}
+	if ctx.Response.StatusCode() != fasthttp.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", ctx.Response.StatusCode(), fasthttp.StatusBadRequest)
+	}
+	body := string(ctx.Response.Body())
+	if !strings.Contains(body, `"errorType":"bad_data"`) || !strings.Contains(body, "unsupported LogQL construct") {
+		t.Fatalf("unexpected error body: %s", body)
+	}
+}
+
+func TestTranslateQueryWithMetricsError(t *testing.T) {
+	var ctx fasthttp.RequestCtx
+
+	ast := &parser.LogQuery{
+		Selector: parser.StreamSelector{
+			Matchers: []parser.LabelMatcher{
+				{Name: "_time", Type: parser.Eq, Value: "2026-05-22T00:00:00Z"},
+			},
+		},
+	}
+
+	result, ok := translateQueryWithMetrics(&ctx, ast, translator.Options{})
+	if ok {
+		t.Fatalf("expected translation to fail, got result %#v", result)
+	}
+	if ctx.Response.StatusCode() != fasthttp.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", ctx.Response.StatusCode(), fasthttp.StatusBadRequest)
+	}
+	body := string(ctx.Response.Body())
+	if !strings.Contains(body, `"errorType":"bad_data"`) || !strings.Contains(body, "_time stream selector is not supported") {
+		t.Fatalf("unexpected error body: %s", body)
+	}
+}
+
+func TestExtractSingleSegmentName(t *testing.T) {
+	if got := extractSingleSegmentName("/loki/api/v1/label/app/values", "/loki/api/v1/label/", "/values"); got != "app" {
+		t.Fatalf("extractSingleSegmentName() = %q, want %q", got, "app")
+	}
+	if got := extractSingleSegmentName("/loki/api/v1/label//values", "/loki/api/v1/label/", "/values"); got != "" {
+		t.Fatalf("expected empty result for empty name, got %q", got)
+	}
+	if got := extractSingleSegmentName("/loki/api/v1/label/app/x/values", "/loki/api/v1/label/", "/values"); got != "" {
+		t.Fatalf("expected empty result for multi-segment name, got %q", got)
+	}
+	if got := extractSingleSegmentName("/wrong/path", "/loki/api/v1/label/", "/values"); got != "" {
+		t.Fatalf("expected empty result for mismatched path, got %q", got)
+	}
+}
+
+func TestResponseSizeBytes(t *testing.T) {
+	var ctx fasthttp.RequestCtx
+	ctx.Response.Header.SetContentLength(7)
+
+	if got := responseSizeBytes(&ctx); got != 7 {
+		t.Fatalf("responseSizeBytes() = %d, want %d", got, 7)
+	}
+}
+
 func TestRecoveryAndLoggingMiddleware(t *testing.T) {
 	panicCtx := newCtx("/boom")
 	RecoveryMiddleware(func(*fasthttp.RequestCtx) {
