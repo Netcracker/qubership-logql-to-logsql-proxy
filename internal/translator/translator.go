@@ -510,7 +510,5 @@ func escapeLit(s string) string {
 // reach the regex engine as literal escapes (for example \. or \(). Double
 // quotes are escaped afterwards to keep the surrounding LogsQL string valid.
 func escapeRe(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, `"`, `\"`)
-	return s
+	return strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s)
 }
