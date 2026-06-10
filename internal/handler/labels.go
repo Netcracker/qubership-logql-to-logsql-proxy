@@ -210,7 +210,7 @@ func filterNames(names, allow, deny []string) []string {
 		denySet[name] = struct{}{}
 	}
 
-	filtered := names[:0]
+	filtered := make([]string, 0, len(names))
 	for _, name := range names {
 		if len(allowSet) > 0 {
 			if _, ok := allowSet[name]; !ok {

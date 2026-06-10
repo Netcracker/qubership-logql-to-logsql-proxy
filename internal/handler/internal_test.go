@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -202,6 +203,29 @@ func TestLabelsUsesParsedTimeRangeAndCachesSuccess(t *testing.T) {
 	}
 	if callCount != 1 {
 		t.Errorf("FieldNames call count = %d, want 1 (second request served from cache)", callCount)
+	}
+}
+
+func TestLabelsFromStaticConfigFilteringDoesNotMutateKnownLabels(t *testing.T) {
+	deps := testDeps(&stubVL{})
+	deps.Cfg.Labels.KnownLabels = []string{"app", "_stream", "env"}
+	deps.Cfg.Labels.DenyLabels = []string{"_stream"}
+
+	for i := 0; i < 2; i++ {
+		ctx := newCtx(`/loki/api/v1/labels`)
+		deps.Labels(ctx)
+		if ctx.Response.StatusCode() != fasthttp.StatusOK {
+			t.Fatalf("request %d status = %d, want 200 body=%s", i+1, ctx.Response.StatusCode(), ctx.Response.Body())
+		}
+
+		body := decodeBody[loki.LabelsResponse](t, ctx)
+		if !slices.Equal(body.Data, []string{"app", "env"}) {
+			t.Fatalf("request %d labels = %v, want [app env]", i+1, body.Data)
+		}
+	}
+
+	if !slices.Equal(deps.Cfg.Labels.KnownLabels, []string{"app", "_stream", "env"}) {
+		t.Fatalf("KnownLabels = %v, want unchanged [app _stream env]", deps.Cfg.Labels.KnownLabels)
 	}
 }
 
