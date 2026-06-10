@@ -184,6 +184,19 @@ func TestTranslateNotPatternFilter(t *testing.T) {
 	}
 }
 
+func TestTranslatePatternFilterEscapesQuotesAndBackslashesForLogsQL(t *testing.T) {
+	r := parseAndTranslate(t, `{service_name="vmagent"} |> "cannot scrape target \"https://127.0.0.1:2379/metrics\""`)
+	if !strings.Contains(r.LogsQL, `_msg:~"`) {
+		t.Errorf("LogsQL %q does not contain _msg regex filter", r.LogsQL)
+	}
+	if !strings.Contains(r.LogsQL, "\\\"https://") {
+		t.Errorf("LogsQL %q does not contain escaped quotes around URL", r.LogsQL)
+	}
+	if !strings.Contains(r.LogsQL, "127\\\\.0\\\\.0\\\\.1:2379/metrics") {
+		t.Errorf("LogsQL %q does not contain doubled backslashes for escaped dots", r.LogsQL)
+	}
+}
+
 func TestTranslateEmptyLineFilterIsNoop(t *testing.T) {
 	r := parseAndTranslate(t, "{app=`api`} |= ``")
 	want := `app:="api"`

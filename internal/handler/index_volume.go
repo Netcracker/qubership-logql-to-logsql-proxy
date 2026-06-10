@@ -11,6 +11,7 @@ import (
 	"github.com/valyala/fasthttp"
 
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/loki"
+	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/metrics"
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/parser"
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/translator"
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/vlogs"
@@ -74,27 +75,16 @@ func (d *Deps) IndexVolume(ctx *fasthttp.RequestCtx) {
 		limit = d.Cfg.Limits.MaxLimit
 	}
 
-	// Parse LogQL.
-	ast, parseErr := parser.Parse(queryStr)
-	if parseErr != nil {
-		var unsup *parser.UnsupportedError
-		if errors.As(parseErr, &unsup) {
-			writeError(ctx, fasthttp.StatusBadRequest, "bad_data",
-				"unsupported LogQL construct: "+unsup.Construct)
-		} else {
-			writeError(ctx, fasthttp.StatusBadRequest, "bad_data",
-				"invalid LogQL query: "+parseErr.Error())
-		}
+	ast, ok := parseLogQLWithMetrics(ctx, queryStr)
+	if !ok {
 		return
 	}
 
-	// Translate to LogsQL.
-	xlat, err := translator.Translate(ast, translator.Options{
+	xlat, ok := translateQueryWithMetrics(ctx, ast, translator.Options{
 		LabelRemap:                d.Cfg.Labels.LabelRemap,
 		ServiceNameFallbackFields: d.Cfg.Labels.ServiceNameFallbackFields,
 	})
-	if err != nil {
-		writeError(ctx, fasthttp.StatusBadRequest, "bad_data", err.Error())
+	if !ok {
 		return
 	}
 
@@ -127,13 +117,26 @@ func (d *Deps) IndexVolume(ctx *fasthttp.RequestCtx) {
 		// complete result — nothing to do
 	case errors.Is(scanErr, vlogs.ErrResponseTooLarge):
 		ctx.Response.Header.Set("X-Proxy-Truncated", "true")
+		metrics.IncResponseTruncated("index_volume_body_limit")
 		slog.Warn("IndexVolume: response truncated by body size limit",
-			"logsql", xlat.LogsQL)
+			"logql", queryStr,
+			"logsql", xlat.LogsQL,
+			"start", start,
+			"end", end,
+			"limit", d.Cfg.Limits.MaxLimit,
+		)
 	case errors.Is(scanErr, context.Canceled), errors.Is(scanErr, context.DeadlineExceeded):
 		writeError(ctx, fasthttp.StatusGatewayTimeout, "timeout", "query timed out")
 		return
 	default:
-		slog.Error("IndexVolume QueryLogs failed", "logsql", xlat.LogsQL, "err", scanErr)
+		slog.Error("IndexVolume QueryLogs failed",
+			"logql", queryStr,
+			"logsql", xlat.LogsQL,
+			"start", start,
+			"end", end,
+			"limit", d.Cfg.Limits.MaxLimit,
+			"err", scanErr,
+		)
 		writeError(ctx, fasthttp.StatusBadGateway, "execution",
 			"VictoriaLogs query failed: "+scanErr.Error())
 		return

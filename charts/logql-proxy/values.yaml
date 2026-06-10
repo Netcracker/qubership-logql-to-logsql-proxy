@@ -48,6 +48,15 @@ service:
   port: 3100
   annotations: {}
 
+serviceMonitor:
+  enabled: true
+  labels: {}
+  annotations: {}
+  interval: 30s
+  scrapeTimeout: 10s
+  path: /metrics
+  honorLabels: false
+
 # ── Ingress (classic Kubernetes Ingress) ──────────────────────────────────────
 # Enable this OR httpRoute — both can coexist but are independent.
 ingress:
@@ -55,8 +64,8 @@ ingress:
   # Ingress class name (e.g. "nginx", "traefik"). Leave empty to use cluster default.
   className: ""
   annotations: {}
-    # nginx.ingress.kubernetes.io/rewrite-target: /
-    # cert-manager.io/cluster-issuer: letsencrypt-prod
+  # nginx.ingress.kubernetes.io/rewrite-target: /
+  # cert-manager.io/cluster-issuer: letsencrypt-prod
   hosts:
     - host: logql-proxy.example.com
       paths:
@@ -171,6 +180,9 @@ proxy:
     writeTimeout: "60s"
     idleTimeout: "90s"
     gracefulTimeout: "15s"
+    # Increase if Grafana sends long query strings and the proxy returns 431
+    # "Too big request header" for GET metadata endpoints.
+    readBufferSize: 65536
 
   vlogs:
     # Required: full base URL of the VictoriaLogs instance.
@@ -226,6 +238,12 @@ proxy:
     # Empty = discover dynamically from VictoriaLogs /field_names on every request.
     knownLabels: []
 
+    # Optional metadata filters for label and field discovery endpoints.
+    allowLabels: []
+    denyLabels: []
+    allowFields: []
+    denyFields: []
+
     # Optional fallback fields used to synthesize Grafana's service_name label
     # when the logs do not store service_name directly.
     serviceNameFallbackFields: []
@@ -236,6 +254,86 @@ proxy:
 
     metadataCacheTTL: "5m"
     metadataCacheSize: 256
+
+  drilldownLimits:
+    # Returned as discover_log_levels in /loki/api/v1/drilldown-limits.
+    # Keep enabled when Grafana should build level-based histograms and filters.
+    discoverLogLevels: true
+    # Ordered candidate fields Grafana may treat as service-name sources in Drilldown.
+    discoverServiceName:
+      - service
+      - app
+      - application
+      - app_name
+      - name
+      - app_kubernetes_io_name
+      - container
+      - container_name
+      - k8s_container_name
+      - component
+      - workload
+      - job
+      - k8s_job_name
+    # Field names Grafana should interpret as log-level / severity fields.
+    logLevelFields:
+      - detected_level
+      - level
+      - severity
+      - LEVEL
+      - Level
+      - log.level
+      - SEVERITY
+      - Severity
+      - SeverityText
+      - lvl
+      - LVL
+      - Lvl
+      - severity_text
+      - Severity_Text
+      - SEVERITY_TEXT
+    # Defaults conceptually align with proxy.limits.maxLimit.
+    maxEntriesLimitPerQuery: 5000
+    maxLineSizeTruncate: false
+    maxQueryBytesRead: "0B"
+    maxQueryLength: "30d1h"
+    maxQueryLookback: "31d"
+    maxQueryRange: "0s"
+    # Defaults conceptually align with proxy.limits.maxStreamsPerResponse.
+    maxQuerySeries: 500
+    metricAggregationEnabled: true
+    # OTLP resource attributes advertised to Grafana as indexed metadata.
+    otlpResourceAttributes:
+      - service.name
+      - service.namespace
+      - service.instance.id
+      - deployment.environment
+      - cloud.region
+      - cloud.availability_zone
+      - k8s.cluster.name
+      - k8s.namespace.name
+      - k8s.pod.name
+      - k8s.container.name
+      - container.name
+      - k8s.replicaset.name
+      - k8s.deployment.name
+      - k8s.statefulset.name
+      - k8s.daemonset.name
+      - k8s.cronjob.name
+      - k8s.job.name
+      - app_id
+      - app_key
+      - kind
+      - deployment.environment.name
+    patternPersistenceEnabled: false
+    # Defaults conceptually align with proxy.vlogs.timeout.
+    queryTimeout: "5m"
+    # Reported data-retention period shown to Grafana.
+    retentionPeriod: "31d"
+    # Enables Log Volume panels in Drilldown and caps their series count.
+    volumeEnabled: true
+    volumeMaxSeries: 100000000
+    patternIngesterEnabled: true
+    version: "fake"
 
   log:
     level: "info"    # debug | info | warn | error

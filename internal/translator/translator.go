@@ -506,8 +506,9 @@ func escapeLit(s string) string {
 }
 
 // escapeRe escapes a regex value for a LogsQL double-quoted string.
-// Only double-quotes are escaped; backslashes retain their regex-engine
-// meaning (e.g. \d, \s, \w are preserved unchanged).
+// Backslashes must be doubled so they survive LogsQL string parsing and still
+// reach the regex engine as literal escapes (for example \. or \(). Double
+// quotes are escaped afterwards to keep the surrounding LogsQL string valid.
 func escapeRe(s string) string {
-	return strings.ReplaceAll(s, `"`, `\"`)
+	return strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s)
 }

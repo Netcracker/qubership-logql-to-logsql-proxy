@@ -1,8 +1,11 @@
 package vlogs
 
 import (
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/metrics"
 )
 
 // MetadataCache is a bounded, TTL-based in-memory cache for VictoriaLogs field
@@ -38,13 +41,16 @@ func NewMetadataCache(maxSize int) *MetadataCache {
 // Get returns the cached string slice for key if it exists and has not expired.
 // The second return value is false on a miss or expiry.
 func (c *MetadataCache) Get(key string) ([]string, bool) {
+	cacheName := cacheMetricName(key)
 	c.mu.RLock()
 	e, ok := c.entries[key]
 	c.mu.RUnlock()
 
 	if !ok || time.Now().After(e.expiresAt) {
+		metrics.IncCacheMiss(cacheName)
 		return nil, false
 	}
+	metrics.IncCacheHit(cacheName)
 	return e.value, true
 }
 
@@ -52,15 +58,18 @@ func (c *MetadataCache) Get(key string) ([]string, bool) {
 // expired entries are evicted first; if still full, one arbitrary live entry is
 // removed to make room.
 func (c *MetadataCache) Set(key string, value []string, ttl time.Duration) {
+	cacheName := cacheMetricName(key)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if len(c.entries) >= c.maxSize {
-		c.evictExpiredLocked()
+		expired := c.evictExpiredLocked()
+		metrics.AddCacheExpirations(cacheName, expired)
 		if len(c.entries) >= c.maxSize {
 			// Still full after expiry sweep: drop one arbitrary entry.
 			for k := range c.entries {
 				delete(c.entries, k)
+				metrics.AddCacheEvictions(cacheName, 1)
 				break
 			}
 		}
@@ -70,16 +79,32 @@ func (c *MetadataCache) Set(key string, value []string, ttl time.Duration) {
 		value:     value,
 		expiresAt: time.Now().Add(ttl),
 	}
+	metrics.IncCacheSet(cacheName)
+	metrics.SetCacheEntries(cacheName, len(c.entries))
 }
 
 // evictExpiredLocked removes all entries whose TTL has elapsed.
 // Must be called with c.mu held for writing.
-func (c *MetadataCache) evictExpiredLocked() {
+func (c *MetadataCache) evictExpiredLocked() int {
 	now := time.Now()
+	removed := 0
 	for k, e := range c.entries {
 		if now.After(e.expiresAt) {
 			delete(c.entries, k)
+			removed++
 		}
+	}
+	return removed
+}
+
+func cacheMetricName(key string) string {
+	switch {
+	case strings.HasPrefix(key, "names:"):
+		return "field_names"
+	case strings.HasPrefix(key, "values:"):
+		return "field_values"
+	default:
+		return "unknown"
 	}
 }
 

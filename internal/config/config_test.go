@@ -44,6 +44,8 @@ func TestLoadAppliesDefaultsFileEnvAndPasswordFile(t *testing.T) {
 
 	t.Setenv("PROXY_SERVER_LISTENADDR", ":9999")
 	t.Setenv("PROXY_LABELS_KNOWNLABELS", " app , team,, env ")
+	t.Setenv("PROXY_LABELS_ALLOWLABELS", " app , env ")
+	t.Setenv("PROXY_LABELS_DENYFIELDS", " _stream , _stream_id ")
 	t.Setenv("PROXY_LOG_LEVEL", "debug")
 
 	cfg, err := Load(cfgFile.Name())
@@ -56,6 +58,9 @@ func TestLoadAppliesDefaultsFileEnvAndPasswordFile(t *testing.T) {
 	}
 	if cfg.Server.ReadTimeout != 30*time.Second {
 		t.Errorf("ReadTimeout = %v, want %v", cfg.Server.ReadTimeout, 30*time.Second)
+	}
+	if cfg.Server.ReadBufferSize != 64*1024 {
+		t.Errorf("ReadBufferSize = %d, want %d", cfg.Server.ReadBufferSize, 64*1024)
 	}
 	if cfg.VLogs.URL != "http://victorialogs:9428" {
 		t.Errorf("VLogs.URL = %q, want %q", cfg.VLogs.URL, "http://victorialogs:9428")
@@ -74,6 +79,12 @@ func TestLoadAppliesDefaultsFileEnvAndPasswordFile(t *testing.T) {
 	}
 	if got := cfg.Labels.KnownLabels; len(got) != 3 || got[0] != "app" || got[1] != "team" || got[2] != "env" {
 		t.Errorf("KnownLabels = %v, want [app team env]", got)
+	}
+	if got := cfg.Labels.AllowLabels; len(got) != 2 || got[0] != "app" || got[1] != "env" {
+		t.Errorf("AllowLabels = %v, want [app env]", got)
+	}
+	if got := cfg.Labels.DenyFields; len(got) != 2 || got[0] != "_stream" || got[1] != "_stream_id" {
+		t.Errorf("DenyFields = %v, want [_stream _stream_id]", got)
 	}
 	if len(cfg.Labels.ServiceNameFallbackFields) == 0 {
 		t.Errorf("ServiceNameFallbackFields should be populated by default")
@@ -185,6 +196,145 @@ func TestLoadAllowsExplicitAggregationScanLimitFromConfig(t *testing.T) {
 	}
 }
 
+func TestLoadAllowsExplicitDrilldownLimitsFromConfig(t *testing.T) {
+	cfgFile, err := os.CreateTemp(t.TempDir(), "config-*.yaml")
+	if err != nil {
+		t.Fatalf("CreateTemp(config): %v", err)
+	}
+	cfgYAML := strings.Join([]string{
+		"vlogs:",
+		"  url: http://victorialogs:9428",
+		"drilldownLimits:",
+		"  discoverServiceName:",
+		"    - service_name",
+		"    - app",
+		"  logLevelFields:",
+		"    - detected_level",
+		"  maxEntriesLimitPerQuery: 2048",
+		"  maxQuerySeries: 900",
+		"  queryTimeout: 45s",
+		"  volumeMaxSeries: 123456",
+		"  version: custom",
+		"",
+	}, "\n")
+	if _, err := cfgFile.WriteString(cfgYAML); err != nil {
+		t.Fatalf("WriteString(config): %v", err)
+	}
+	if err := cfgFile.Close(); err != nil {
+		t.Fatalf("Close(config): %v", err)
+	}
+
+	cfg, err := Load(cfgFile.Name())
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+
+	if got := cfg.DrilldownLimits.DiscoverServiceName; len(got) != 2 || got[0] != "service_name" || got[1] != "app" {
+		t.Fatalf("DiscoverServiceName = %v, want [service_name app]", got)
+	}
+	if got := cfg.DrilldownLimits.LogLevelFields; len(got) != 1 || got[0] != "detected_level" {
+		t.Fatalf("LogLevelFields = %v, want [detected_level]", got)
+	}
+	if cfg.DrilldownLimits.MaxEntriesLimitPerQuery != 2048 {
+		t.Fatalf("MaxEntriesLimitPerQuery = %d, want 2048", cfg.DrilldownLimits.MaxEntriesLimitPerQuery)
+	}
+	if cfg.DrilldownLimits.MaxQuerySeries != 900 {
+		t.Fatalf("MaxQuerySeries = %d, want 900", cfg.DrilldownLimits.MaxQuerySeries)
+	}
+	if cfg.DrilldownLimits.QueryTimeout != "45s" {
+		t.Fatalf("QueryTimeout = %q, want 45s", cfg.DrilldownLimits.QueryTimeout)
+	}
+	if cfg.DrilldownLimits.VolumeMaxSeries != 123456 {
+		t.Fatalf("VolumeMaxSeries = %d, want 123456", cfg.DrilldownLimits.VolumeMaxSeries)
+	}
+	if cfg.DrilldownLimits.Version != "custom" {
+		t.Fatalf("Version = %q, want custom", cfg.DrilldownLimits.Version)
+	}
+}
+
+func TestLoadDefaultsDrilldownLimitsFromRuntimeLimits(t *testing.T) {
+	cfgFile, err := os.CreateTemp(t.TempDir(), "config-*.yaml")
+	if err != nil {
+		t.Fatalf("CreateTemp(config): %v", err)
+	}
+	cfgYAML := strings.Join([]string{
+		"vlogs:",
+		"  url: http://victorialogs:9428",
+		"  timeout: 45s",
+		"limits:",
+		"  maxLimit: 2048",
+		"  maxStreamsPerResponse: 321",
+		"",
+	}, "\n")
+	if _, err := cfgFile.WriteString(cfgYAML); err != nil {
+		t.Fatalf("WriteString(config): %v", err)
+	}
+	if err := cfgFile.Close(); err != nil {
+		t.Fatalf("Close(config): %v", err)
+	}
+
+	cfg, err := Load(cfgFile.Name())
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+
+	if cfg.DrilldownLimits.MaxEntriesLimitPerQuery != 2048 {
+		t.Fatalf("MaxEntriesLimitPerQuery = %d, want 2048", cfg.DrilldownLimits.MaxEntriesLimitPerQuery)
+	}
+	if cfg.DrilldownLimits.MaxQuerySeries != 321 {
+		t.Fatalf("MaxQuerySeries = %d, want 321", cfg.DrilldownLimits.MaxQuerySeries)
+	}
+	if cfg.DrilldownLimits.QueryTimeout != "45s" {
+		t.Fatalf("QueryTimeout = %q, want 45s", cfg.DrilldownLimits.QueryTimeout)
+	}
+}
+
+func TestLoadAllowsExplicitLabelAndFieldFiltersFromConfig(t *testing.T) {
+	cfgFile, err := os.CreateTemp(t.TempDir(), "config-*.yaml")
+	if err != nil {
+		t.Fatalf("CreateTemp(config): %v", err)
+	}
+	cfgYAML := strings.Join([]string{
+		"vlogs:",
+		"  url: http://victorialogs:9428",
+		"labels:",
+		"  allowLabels:",
+		"    - app",
+		"    - namespace",
+		"  denyLabels:",
+		"    - _stream",
+		"  allowFields:",
+		"    - level",
+		"  denyFields:",
+		"    - _msg",
+		"",
+	}, "\n")
+	if _, err := cfgFile.WriteString(cfgYAML); err != nil {
+		t.Fatalf("WriteString(config): %v", err)
+	}
+	if err := cfgFile.Close(); err != nil {
+		t.Fatalf("Close(config): %v", err)
+	}
+
+	cfg, err := Load(cfgFile.Name())
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+
+	if got := cfg.Labels.AllowLabels; len(got) != 2 || got[0] != "app" || got[1] != "namespace" {
+		t.Fatalf("AllowLabels = %v, want [app namespace]", got)
+	}
+	if got := cfg.Labels.DenyLabels; len(got) != 1 || got[0] != "_stream" {
+		t.Fatalf("DenyLabels = %v, want [_stream]", got)
+	}
+	if got := cfg.Labels.AllowFields; len(got) != 1 || got[0] != "level" {
+		t.Fatalf("AllowFields = %v, want [level]", got)
+	}
+	if got := cfg.Labels.DenyFields; len(got) != 1 || got[0] != "_msg" {
+		t.Fatalf("DenyFields = %v, want [_msg]", got)
+	}
+}
+
 func TestLoadReturnsConversionErrorForInvalidDuration(t *testing.T) {
 	cfgFile, err := os.CreateTemp(t.TempDir(), "config-*.yaml")
 	if err != nil {
@@ -203,6 +353,35 @@ func TestLoadReturnsConversionErrorForInvalidDuration(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `server.readTimeout: invalid duration "nope"`) {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadAllowsExplicitReadBufferSizeFromConfig(t *testing.T) {
+	cfgFile, err := os.CreateTemp(t.TempDir(), "config-*.yaml")
+	if err != nil {
+		t.Fatalf("CreateTemp(config): %v", err)
+	}
+	cfgYAML := strings.Join([]string{
+		"vlogs:",
+		"  url: http://victorialogs:9428",
+		"server:",
+		"  readBufferSize: 131072",
+		"",
+	}, "\n")
+	if _, err := cfgFile.WriteString(cfgYAML); err != nil {
+		t.Fatalf("WriteString(config): %v", err)
+	}
+	if err := cfgFile.Close(); err != nil {
+		t.Fatalf("Close(config): %v", err)
+	}
+
+	cfg, err := Load(cfgFile.Name())
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+
+	if cfg.Server.ReadBufferSize != 131072 {
+		t.Fatalf("ReadBufferSize = %d, want 131072", cfg.Server.ReadBufferSize)
 	}
 }
 

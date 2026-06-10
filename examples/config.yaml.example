@@ -1,6 +1,9 @@
 server:
   listenAddr: ":3100"
   writeTimeout: 60s
+  # Increase if Grafana sends long query strings and the proxy returns 431
+  # "Too big request header".
+  readBufferSize: 65536
 
 vlogs:
   url: "http://victorialogs:9428"
@@ -39,6 +42,19 @@ labels:
   # Leave empty to discover dynamically from VL /field_names
   knownLabels: []
 
+  # Optional metadata filters for label and field discovery endpoints.
+  # Empty allow-lists mean "allow everything".
+  # allowLabels:
+  #   - app
+  #   - namespace
+  # denyLabels:
+  #   - _stream
+  # allowFields:
+  #   - level
+  #   - detected_level
+  # denyFields:
+  #   - _msg
+
   # Optional fallback fields used to synthesize Grafana's service_name label
   # when the logs do not store service_name directly.
   # serviceNameFallbackFields:
@@ -58,3 +74,42 @@ labels:
 log:
   level: "info"
   format: "json"
+
+drilldownLimits:
+  # Returned to Grafana as discover_log_levels.
+  discoverLogLevels: true
+  # Ordered candidate fields Grafana may use to infer service names in Drilldown.
+  discoverServiceName:
+    - service
+    - app
+    - application
+  # Field names Grafana should treat as level/severity fields.
+  logLevelFields:
+    - detected_level
+    - level
+    - severity
+  # Defaults to limits.maxLimit when omitted.
+  maxEntriesLimitPerQuery: 5000
+  maxLineSizeTruncate: false
+  maxQueryBytesRead: "0B"
+  maxQueryLength: "30d1h"
+  maxQueryLookback: "31d"
+  maxQueryRange: "0s"
+  # Defaults to limits.maxStreamsPerResponse when omitted.
+  maxQuerySeries: 500
+  metricAggregationEnabled: true
+  # OTLP resource attributes advertised as indexed metadata for Drilldown.
+  otlpResourceAttributes:
+    - service.name
+    - k8s.namespace.name
+    - k8s.pod.name
+  patternPersistenceEnabled: false
+  # Defaults to vlogs.timeout when omitted.
+  queryTimeout: "5m"
+  # Retention period reported to Grafana.
+  retentionPeriod: "31d"
+  # Enables volume panels and sets the advertised series cap.
+  volumeEnabled: true
+  volumeMaxSeries: 100000000
+  patternIngesterEnabled: true
+  version: "fake"

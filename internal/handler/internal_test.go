@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -69,6 +70,23 @@ func testDeps(vl vlogs.VLogsClient) *Deps {
 	cfg.Labels.MetadataCacheTTL = time.Minute
 	cfg.Labels.MetadataCacheSize = 16
 	cfg.Labels.LabelRemap = map[string]string{"detected_level": "level"}
+	cfg.DrilldownLimits.DiscoverLogLevels = true
+	cfg.DrilldownLimits.DiscoverServiceName = []string{"service", "app", "application"}
+	cfg.DrilldownLimits.LogLevelFields = []string{"level", "severity"}
+	cfg.DrilldownLimits.MaxEntriesLimitPerQuery = 5000
+	cfg.DrilldownLimits.MaxQueryBytesRead = "0B"
+	cfg.DrilldownLimits.MaxQueryLength = "30d1h"
+	cfg.DrilldownLimits.MaxQueryLookback = "31d"
+	cfg.DrilldownLimits.MaxQueryRange = "0s"
+	cfg.DrilldownLimits.MaxQuerySeries = 500
+	cfg.DrilldownLimits.MetricAggregationEnabled = true
+	cfg.DrilldownLimits.OTLPResourceAttributes = []string{"service.name", "k8s.namespace.name"}
+	cfg.DrilldownLimits.QueryTimeout = "5m"
+	cfg.DrilldownLimits.RetentionPeriod = "31d"
+	cfg.DrilldownLimits.VolumeEnabled = true
+	cfg.DrilldownLimits.VolumeMaxSeries = 100000000
+	cfg.DrilldownLimits.PatternIngesterEnabled = true
+	cfg.DrilldownLimits.Version = "fake"
 	return &Deps{
 		Cfg:   cfg,
 		VL:    vl,
@@ -188,6 +206,29 @@ func TestLabelsUsesParsedTimeRangeAndCachesSuccess(t *testing.T) {
 	}
 }
 
+func TestLabelsFromStaticConfigFilteringDoesNotMutateKnownLabels(t *testing.T) {
+	deps := testDeps(&stubVL{})
+	deps.Cfg.Labels.KnownLabels = []string{"app", "_stream", "env"}
+	deps.Cfg.Labels.DenyLabels = []string{"_stream"}
+
+	for i := 0; i < 2; i++ {
+		ctx := newCtx(`/loki/api/v1/labels`)
+		deps.Labels(ctx)
+		if ctx.Response.StatusCode() != fasthttp.StatusOK {
+			t.Fatalf("request %d status = %d, want 200 body=%s", i+1, ctx.Response.StatusCode(), ctx.Response.Body())
+		}
+
+		body := decodeBody[loki.LabelsResponse](t, ctx)
+		if !slices.Equal(body.Data, []string{"app", "env"}) {
+			t.Fatalf("request %d labels = %v, want [app env]", i+1, body.Data)
+		}
+	}
+
+	if !slices.Equal(deps.Cfg.Labels.KnownLabels, []string{"app", "_stream", "env"}) {
+		t.Fatalf("KnownLabels = %v, want unchanged [app _stream env]", deps.Cfg.Labels.KnownLabels)
+	}
+}
+
 func TestLabelsErrorIsNotCached(t *testing.T) {
 	callCount := 0
 	deps := testDeps(&stubVL{
@@ -303,6 +344,28 @@ func TestDetectedFieldsIgnoresPipelineStagesForScoping(t *testing.T) {
 	}
 }
 
+func TestDetectedFieldsApplyAllowAndDenyFilters(t *testing.T) {
+	deps := testDeps(&stubVL{
+		fieldNamesFn: func(_ context.Context, req vlogs.FieldNamesRequest) ([]string, error) {
+			return []string{"level", "_msg", "_stream", "pod"}, nil
+		},
+	})
+	deps.Cfg.Labels.AllowFields = []string{"level", "_stream", "pod"}
+	deps.Cfg.Labels.DenyFields = []string{"_stream"}
+
+	ctx := newCtx(`/loki/api/v1/detected_fields?query={app="api"}&start=1705320000&end=1705323600`)
+	deps.DetectedFields(ctx)
+
+	if ctx.Response.StatusCode() != fasthttp.StatusOK {
+		t.Fatalf("status = %d, want 200 body=%s", ctx.Response.StatusCode(), ctx.Response.Body())
+	}
+
+	body := decodeBody[loki.DetectedFieldsResponse](t, ctx)
+	if len(body.Fields) != 2 || body.Fields[0].Label != "level" || body.Fields[1].Label != "pod" {
+		t.Fatalf("fields = %+v, want [level pod]", body.Fields)
+	}
+}
+
 func TestDetectedFieldsErrorReturnsBadGateway(t *testing.T) {
 	deps := testDeps(&stubVL{
 		fieldNamesFn: func(_ context.Context, req vlogs.FieldNamesRequest) ([]string, error) {
@@ -374,6 +437,116 @@ func TestHelpersCoverFallbackAndParsing(t *testing.T) {
 	}
 	if got := parseDuration("bad"); got != time.Minute {
 		t.Errorf("parseDuration(bad) = %v, want 1m", got)
+	}
+}
+
+func TestMetricsHelpersNormalizedRoute(t *testing.T) {
+	cases := map[string]string{
+		"/loki/api/v1/label/app/values":            "/loki/api/v1/label/:name/values",
+		"/loki/api/v1/detected_field/level/values": "/loki/api/v1/detected_field/:name/values",
+		"/loki/api/v1/query_range":                 "/loki/api/v1/query_range",
+	}
+	for path, want := range cases {
+		if got := normalizedRoute(path); got != want {
+			t.Fatalf("normalizedRoute(%q) = %q, want %q", path, got, want)
+		}
+	}
+}
+
+func TestParseAndTranslateWithMetrics(t *testing.T) {
+	var ctx fasthttp.RequestCtx
+
+	ast, ok := parseLogQLWithMetrics(&ctx, `{app="api"} |= "err"`)
+	if !ok {
+		t.Fatalf("parseLogQLWithMetrics() returned ok=false for valid query")
+	}
+
+	result, ok := translateQueryWithMetrics(&ctx, ast, translator.Options{})
+	if !ok {
+		t.Fatalf("translateQueryWithMetrics() returned ok=false for valid AST")
+	}
+	if result.LogsQL == "" {
+		t.Fatalf("expected non-empty translated LogsQL")
+	}
+}
+
+func TestParseLogQLWithMetricsInvalidQuery(t *testing.T) {
+	var ctx fasthttp.RequestCtx
+
+	ast, ok := parseLogQLWithMetrics(&ctx, `{app="api"`)
+	if ok {
+		t.Fatalf("expected invalid query to fail, got AST %#v", ast)
+	}
+	if ctx.Response.StatusCode() != fasthttp.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", ctx.Response.StatusCode(), fasthttp.StatusBadRequest)
+	}
+	body := string(ctx.Response.Body())
+	if !strings.Contains(body, `"errorType":"bad_data"`) || !strings.Contains(body, "invalid LogQL query") {
+		t.Fatalf("unexpected error body: %s", body)
+	}
+}
+
+func TestParseLogQLWithMetricsUnsupportedQuery(t *testing.T) {
+	var ctx fasthttp.RequestCtx
+
+	ast, ok := parseLogQLWithMetrics(&ctx, `{app="api"} | line_format "{{.msg}}"`)
+	if ok {
+		t.Fatalf("expected unsupported query to fail, got AST %#v", ast)
+	}
+	if ctx.Response.StatusCode() != fasthttp.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", ctx.Response.StatusCode(), fasthttp.StatusBadRequest)
+	}
+	body := string(ctx.Response.Body())
+	if !strings.Contains(body, `"errorType":"bad_data"`) || !strings.Contains(body, "unsupported LogQL construct") {
+		t.Fatalf("unexpected error body: %s", body)
+	}
+}
+
+func TestTranslateQueryWithMetricsError(t *testing.T) {
+	var ctx fasthttp.RequestCtx
+
+	ast := &parser.LogQuery{
+		Selector: parser.StreamSelector{
+			Matchers: []parser.LabelMatcher{
+				{Name: "_time", Type: parser.Eq, Value: "2026-05-22T00:00:00Z"},
+			},
+		},
+	}
+
+	result, ok := translateQueryWithMetrics(&ctx, ast, translator.Options{})
+	if ok {
+		t.Fatalf("expected translation to fail, got result %#v", result)
+	}
+	if ctx.Response.StatusCode() != fasthttp.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", ctx.Response.StatusCode(), fasthttp.StatusBadRequest)
+	}
+	body := string(ctx.Response.Body())
+	if !strings.Contains(body, `"errorType":"bad_data"`) || !strings.Contains(body, "_time stream selector is not supported") {
+		t.Fatalf("unexpected error body: %s", body)
+	}
+}
+
+func TestExtractSingleSegmentName(t *testing.T) {
+	if got := extractSingleSegmentName("/loki/api/v1/label/app/values", "/loki/api/v1/label/", "/values"); got != "app" {
+		t.Fatalf("extractSingleSegmentName() = %q, want %q", got, "app")
+	}
+	if got := extractSingleSegmentName("/loki/api/v1/label//values", "/loki/api/v1/label/", "/values"); got != "" {
+		t.Fatalf("expected empty result for empty name, got %q", got)
+	}
+	if got := extractSingleSegmentName("/loki/api/v1/label/app/x/values", "/loki/api/v1/label/", "/values"); got != "" {
+		t.Fatalf("expected empty result for multi-segment name, got %q", got)
+	}
+	if got := extractSingleSegmentName("/wrong/path", "/loki/api/v1/label/", "/values"); got != "" {
+		t.Fatalf("expected empty result for mismatched path, got %q", got)
+	}
+}
+
+func TestResponseSizeBytes(t *testing.T) {
+	var ctx fasthttp.RequestCtx
+	ctx.Response.Header.SetContentLength(7)
+
+	if got := responseSizeBytes(&ctx); got != 7 {
+		t.Fatalf("responseSizeBytes() = %d, want %d", got, 7)
 	}
 }
 
@@ -612,7 +785,7 @@ func TestHandleMetricQueryAndParseRecordTime(t *testing.T) {
 	}
 
 	ctx := newCtx(`/loki/api/v1/query_range`)
-	deps.handleMetricQuery(ctx, result, ast, time.Unix(1705320000, 0).UTC(), time.Unix(1705323600, 0).UTC(), 0)
+	deps.handleMetricQuery(ctx, `rate({app="api"}[5m])`, result, ast, time.Unix(1705320000, 0).UTC(), time.Unix(1705323600, 0).UTC(), 0)
 	if ctx.Response.StatusCode() != fasthttp.StatusOK {
 		t.Fatalf("handleMetricQuery status = %d, want 200", ctx.Response.StatusCode())
 	}

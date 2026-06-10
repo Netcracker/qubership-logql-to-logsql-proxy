@@ -5,6 +5,8 @@ import (
 
 	"github.com/fasthttp/router"
 	"github.com/valyala/fasthttp"
+
+	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/metrics"
 )
 
 // BuildHandler constructs the full fasthttp.RequestHandler with all Loki-compatible
@@ -35,6 +37,7 @@ func (d *Deps) BuildHandler() fasthttp.RequestHandler {
 	r.GET("/loki/api/v1/index/volume_range", d.IndexVolume)
 	r.GET("/loki/api/v1/drilldown-limits", d.DrilldownLimits)
 	r.GET("/loki/api/v1/patterns", d.Patterns)
+	r.GET("/metrics", metrics.Handler())
 	r.GET("/ready", Ready)
 
 	inner := r.Handler

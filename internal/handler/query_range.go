@@ -13,6 +13,7 @@ import (
 	"github.com/valyala/fasthttp"
 
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/loki"
+	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/metrics"
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/parser"
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/translator"
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/vlogs"
@@ -119,37 +120,26 @@ func (d *Deps) handleQuery(ctx *fasthttp.RequestCtx, instant bool) {
 		step = parseDuration(stepStr)
 	}
 
-	// Parse LogQL.
-	ast, err := parser.Parse(queryStr)
-	if err != nil {
-		var unsup *parser.UnsupportedError
-		if errors.As(err, &unsup) {
-			writeError(ctx, fasthttp.StatusBadRequest, "bad_data",
-				"unsupported LogQL construct: "+unsup.Construct)
-		} else {
-			writeError(ctx, fasthttp.StatusBadRequest, "bad_data",
-				"invalid LogQL query: "+err.Error())
-		}
+	ast, ok := parseLogQLWithMetrics(ctx, queryStr)
+	if !ok {
 		return
 	}
 
-	// Translate to LogsQL.
-	result, err := translator.Translate(ast, translator.Options{
+	result, ok := translateQueryWithMetrics(ctx, ast, translator.Options{
 		LabelRemap:                d.Cfg.Labels.LabelRemap,
 		ServiceNameFallbackFields: d.Cfg.Labels.ServiceNameFallbackFields,
 	})
-	if err != nil {
-		writeError(ctx, fasthttp.StatusBadRequest, "bad_data", err.Error())
+	if !ok {
 		return
 	}
 
 	switch {
 	case result.IsAggregation:
-		d.handleAggregationQuery(ctx, result, start, end, step)
+		d.handleAggregationQuery(ctx, queryStr, result, start, end, step)
 	case result.IsMetric:
-		d.handleMetricQuery(ctx, result, ast, start, end, step)
+		d.handleMetricQuery(ctx, queryStr, result, ast, start, end, step)
 	default:
-		d.handleLogQuery(ctx, result, start, end, limit)
+		d.handleLogQuery(ctx, queryStr, result, start, end, limit)
 	}
 }
 
@@ -159,6 +149,7 @@ func (d *Deps) handleQuery(ctx *fasthttp.RequestCtx, instant bool) {
 
 func (d *Deps) handleLogQuery(
 	ctx *fasthttp.RequestCtx,
+	logql string,
 	result translator.Result,
 	start, end time.Time,
 	limit int,
@@ -180,13 +171,26 @@ func (d *Deps) handleLogQuery(
 		// full result
 	case errors.Is(err, vlogs.ErrResponseTooLarge):
 		ctx.Response.Header.Set("X-Proxy-Truncated", "true")
+		metrics.IncResponseTruncated("query_logs_body_limit")
 		slog.Warn("QueryLogs response truncated: body size limit reached",
-			"logsql", result.LogsQL)
+			"logql", logql,
+			"logsql", result.LogsQL,
+			"start", start,
+			"end", end,
+			"limit", limit,
+		)
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		writeError(ctx, fasthttp.StatusGatewayTimeout, "timeout", "query timed out")
 		return
 	default:
-		slog.Error("QueryLogs failed", "logsql", result.LogsQL, "err", err)
+		slog.Error("QueryLogs failed",
+			"logql", logql,
+			"logsql", result.LogsQL,
+			"start", start,
+			"end", end,
+			"limit", limit,
+			"err", err,
+		)
 		writeError(ctx, fasthttp.StatusBadGateway, "execution",
 			"VictoriaLogs query failed: "+err.Error())
 		return
@@ -194,6 +198,7 @@ func (d *Deps) handleLogQuery(
 
 	if grouper.Truncated() {
 		ctx.Response.Header.Set("X-Proxy-Truncated", "true")
+		metrics.IncResponseTruncated("query_logs_stream_limit")
 	}
 
 	writeJSON(ctx, fasthttp.StatusOK, loki.StreamsResponse{
@@ -211,6 +216,7 @@ func (d *Deps) handleLogQuery(
 
 func (d *Deps) handleMetricQuery(
 	ctx *fasthttp.RequestCtx,
+	logql string,
 	result translator.Result,
 	ast parser.Query,
 	start, end time.Time,
@@ -231,7 +237,14 @@ func (d *Deps) handleMetricQuery(
 			writeError(ctx, fasthttp.StatusGatewayTimeout, "timeout", "query timed out")
 			return
 		}
-		slog.Error("QueryHits failed", "logsql", result.LogsQL, "err", err)
+		slog.Error("QueryHits failed",
+			"logql", logql,
+			"logsql", result.LogsQL,
+			"start", start,
+			"end", end,
+			"step", step,
+			"err", err,
+		)
 		writeError(ctx, fasthttp.StatusBadGateway, "execution",
 			"VictoriaLogs hits query failed: "+err.Error())
 		return
@@ -263,6 +276,7 @@ func (d *Deps) handleMetricQuery(
 // The time bucket is determined by floor((record_time - start) / step).
 func (d *Deps) handleAggregationQuery(
 	ctx *fasthttp.RequestCtx,
+	logql string,
 	result translator.Result,
 	start, end time.Time,
 	step time.Duration,
@@ -317,12 +331,28 @@ func (d *Deps) handleAggregationQuery(
 	case scanErr == nil:
 	case errors.Is(scanErr, vlogs.ErrResponseTooLarge):
 		ctx.Response.Header.Set("X-Proxy-Truncated", "true")
-		slog.Warn("handleAggregationQuery: response truncated", "logsql", result.LogsQL)
+		metrics.IncResponseTruncated("aggregation_body_limit")
+		slog.Warn("handleAggregationQuery: response truncated",
+			"logql", logql,
+			"logsql", result.LogsQL,
+			"start", start,
+			"end", end,
+			"step", step,
+			"limit", req.Limit,
+		)
 	case errors.Is(scanErr, context.Canceled), errors.Is(scanErr, context.DeadlineExceeded):
 		writeError(ctx, fasthttp.StatusGatewayTimeout, "timeout", "query timed out")
 		return
 	default:
-		slog.Error("handleAggregationQuery QueryLogs failed", "logsql", result.LogsQL, "err", scanErr)
+		slog.Error("handleAggregationQuery QueryLogs failed",
+			"logql", logql,
+			"logsql", result.LogsQL,
+			"start", start,
+			"end", end,
+			"step", step,
+			"limit", req.Limit,
+			"err", scanErr,
+		)
 		writeError(ctx, fasthttp.StatusBadGateway, "execution",
 			"VictoriaLogs query failed: "+scanErr.Error())
 		return

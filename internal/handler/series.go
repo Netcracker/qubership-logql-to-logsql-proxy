@@ -2,10 +2,12 @@ package handler
 
 import (
 	"log/slog"
+	"time"
 
 	"github.com/valyala/fasthttp"
 
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/loki"
+	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/metrics"
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/parser"
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/translator"
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/vlogs"
@@ -29,6 +31,10 @@ func (d *Deps) Series(ctx *fasthttp.RequestCtx) {
 	}
 
 	logsql := d.seriesFilter(ctx)
+	match := string(ctx.QueryArgs().Peek("match[]"))
+	if match == "" {
+		match = "*"
+	}
 
 	grouper := loki.NewStreamGrouper(d.Cfg.Labels.KnownLabels, d.Cfg.Limits.MaxStreamsPerResponse)
 
@@ -40,10 +46,20 @@ func (d *Deps) Series(ctx *fasthttp.RequestCtx) {
 	}, grouper.Add)
 
 	if err != nil && !isLargeOrCancelled(err) {
-		slog.Error("Series QueryLogs failed", "err", err)
+		slog.Error("Series QueryLogs failed",
+			"logql", match,
+			"logsql", logsql,
+			"start", start,
+			"end", end,
+			"limit", d.Cfg.Limits.MaxStreamsPerResponse,
+			"err", err,
+		)
 		writeError(ctx, fasthttp.StatusBadGateway, "execution",
 			"failed to query streams from VictoriaLogs")
 		return
+	}
+	if err == vlogs.ErrResponseTooLarge {
+		metrics.IncResponseTruncated("series_body_limit")
 	}
 
 	// Build the series response from the distinct streams collected by the grouper.
@@ -69,17 +85,21 @@ func (d *Deps) seriesFilter(ctx *fasthttp.RequestCtx) string {
 		return "*"
 	}
 
+	start := time.Now()
 	ast, err := parser.Parse(match)
+	metrics.ObserveParseDuration(time.Since(start))
 	if err != nil {
 		slog.Warn("Series: cannot parse match[] selector, using match-all",
 			"match", match, "err", err)
 		return "*"
 	}
 
+	start = time.Now()
 	res, err := translator.Translate(ast, translator.Options{
 		LabelRemap:                d.Cfg.Labels.LabelRemap,
 		ServiceNameFallbackFields: d.Cfg.Labels.ServiceNameFallbackFields,
 	})
+	metrics.ObserveTranslateDuration(time.Since(start))
 	if err != nil {
 		slog.Warn("Series: cannot translate match[] selector, using match-all",
 			"match", match, "err", err)

@@ -14,6 +14,7 @@ import (
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/config"
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/handler"
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/limits"
+	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/metrics"
 	"github.com/netcracker/qubership-logql-to-logsql-proxy/internal/vlogs"
 )
 
@@ -52,6 +53,7 @@ func main() {
 
 	vlClient := vlogs.NewClient(cfg.VLogs, cfg.Limits.MaxResponseBodyBytes)
 	lim := limits.New(cfg.Limits.MaxConcurrentQueries, cfg.Limits.MaxQueueDepth)
+	metrics.RegisterLimiter(lim)
 	cache := vlogs.NewMetadataCache(cfg.Labels.MetadataCacheSize)
 
 	deps := &handler.Deps{
@@ -80,10 +82,11 @@ func main() {
 	// ── Start HTTP server ───────────────────────────────────────────────────
 
 	srv := &fasthttp.Server{
-		Handler:      h,
-		ReadTimeout:  cfg.Server.ReadTimeout,
-		WriteTimeout: cfg.Server.WriteTimeout,
-		IdleTimeout:  cfg.Server.IdleTimeout,
+		Handler:        h,
+		ReadTimeout:    cfg.Server.ReadTimeout,
+		WriteTimeout:   cfg.Server.WriteTimeout,
+		IdleTimeout:    cfg.Server.IdleTimeout,
+		ReadBufferSize: cfg.Server.ReadBufferSize,
 	}
 
 	// Start server in a goroutine so we can listen for shutdown signals.

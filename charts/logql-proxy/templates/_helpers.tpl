@@ -89,6 +89,7 @@ server:
   writeTimeout: {{ .Values.proxy.server.writeTimeout | quote }}
   idleTimeout: {{ .Values.proxy.server.idleTimeout | quote }}
   gracefulTimeout: {{ .Values.proxy.server.gracefulTimeout | quote }}
+  readBufferSize: {{ .Values.proxy.server.readBufferSize }}
 
 vlogs:
   url: {{ .Values.proxy.vlogs.url | quote }}
@@ -122,6 +123,22 @@ labels:
   {{- else }}
   knownLabels: []
   {{- end }}
+  {{- if .Values.proxy.labels.allowLabels }}
+  allowLabels:
+    {{- toYaml .Values.proxy.labels.allowLabels | nindent 4 }}
+  {{- end }}
+  {{- if .Values.proxy.labels.denyLabels }}
+  denyLabels:
+    {{- toYaml .Values.proxy.labels.denyLabels | nindent 4 }}
+  {{- end }}
+  {{- if .Values.proxy.labels.allowFields }}
+  allowFields:
+    {{- toYaml .Values.proxy.labels.allowFields | nindent 4 }}
+  {{- end }}
+  {{- if .Values.proxy.labels.denyFields }}
+  denyFields:
+    {{- toYaml .Values.proxy.labels.denyFields | nindent 4 }}
+  {{- end }}
   {{- if .Values.proxy.labels.serviceNameFallbackFields }}
   serviceNameFallbackFields:
     {{- toYaml .Values.proxy.labels.serviceNameFallbackFields | nindent 4 }}
@@ -136,4 +153,7 @@ labels:
 log:
   level: {{ .Values.proxy.log.level | quote }}
   format: {{ .Values.proxy.log.format | quote }}
+
+drilldownLimits:
+  {{- toYaml .Values.proxy.drilldownLimits | nindent 2 }}
 {{- end }}
