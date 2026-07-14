@@ -1,0 +1,37 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "schedule": [
+    "* * * * 0"
+  ],
+  "semanticCommits": "enabled",
+  "semanticCommitType": "chore",
+  "semanticCommitScope": "deps",
+  "prConcurrentLimit": 20,
+  "packageRules": [
+    {
+      "matchManagers": [
+        "github-actions"
+      ],
+      "groupName": "github-actions all",
+      "semanticCommitScope": "deps"
+    },
+    {
+      "matchManagers": [
+        "gomod"
+      ],
+      "prConcurrentLimit": 10,
+      "semanticCommitScope": "deps"
+    },
+    {
+      "matchManagers": [
+        "dockerfile",
+        "docker-compose"
+      ],
+      "groupName": "docker all",
+      "semanticCommitScope": "deps"
+    }
+  ]
+}
