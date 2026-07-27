@@ -8,7 +8,7 @@ image:
   repository: ghcr.io/netcracker/qubership-logql-to-logsql-proxy
   pullPolicy: IfNotPresent
   # Overrides the chart appVersion when set.
-  tag: ""
+  tag: "@sha256:ab70396377c9cfba0d85b1ed2f3b572080f50c13bf9133eea5f869b99183938c"
 
 imagePullSecrets: []
 
