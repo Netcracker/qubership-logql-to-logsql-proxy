@@ -30,7 +30,8 @@
         "!ghcr.io/netcracker/**",
         "!ghcr.io/Netcracker/**",
         "!netcracker/**",
-        "!Netcracker/**"
+        "!Netcracker/**",
+        "!golang"
       ],
       "groupName": "docker all",
       "semanticCommitScope": "deps"
