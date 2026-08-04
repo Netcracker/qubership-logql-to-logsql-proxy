@@ -6,17 +6,13 @@
     "github>Netcracker/renovate-config:go",
     "github>Netcracker/renovate-config:netcracker-dependencies"
   ],
-  "semanticCommits": "enabled",
-  "semanticCommitType": "chore",
-  "semanticCommitScope": "deps",
   "prConcurrentLimit": 20,
   "packageRules": [
     {
       "matchManagers": [
         "gomod"
       ],
-      "prConcurrentLimit": 10,
-      "semanticCommitScope": "deps"
+      "prConcurrentLimit": 10
     },
     {
       "matchManagers": [
@@ -33,8 +29,7 @@
         "!index.docker.io/library/golang",
         "!registry-1.docker.io/library/golang"
       ],
-      "groupName": "docker all",
-      "semanticCommitScope": "deps"
+      "groupName": "docker all"
     }
   ]
 }
