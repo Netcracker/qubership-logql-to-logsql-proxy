@@ -335,7 +335,7 @@ jobs:
 
               if [[ "$ignored_repository_problem_count" -eq 0 || "$actionable_repository_problem_count" -ne 0 ]]; then
                 reasons+=('Dependency Dashboard reports repository problems')
-              else
+              elif [[ "$LOOKUP_RESULT" == 'success' ]]; then
                 notes+=('Dependency Dashboard only reports expected timestamp notices or lookup failures covered by the local check')
               fi
             fi
