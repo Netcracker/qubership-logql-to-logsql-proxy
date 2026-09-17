@@ -14,7 +14,7 @@ name: Lint Code Base
 on:
   push:
     branches:
-    - '**'
+    - main
   pull_request:
     branches:
     - '**'
@@ -25,12 +25,13 @@ on:
         default: false
         required: false
         description: "Lint all codebase"
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   prepare-configs:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
     - name: "Get the common linters configuration"
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -95,3 +96,14 @@ jobs:
         # To report GitHub Actions status checks
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         DEFAULT_BRANCH: ${{ github.event.pull_request.base.ref || github.event.push.ref }}
+
+  lint-gate:
+    name: Lint Gate
+    needs: [prepare-configs, run-lint]
+    if: ${{ always() && github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Require successful lint
+        if: needs.prepare-configs.result != 'success' || needs.run-lint.result != 'success'
+        run: exit 1
