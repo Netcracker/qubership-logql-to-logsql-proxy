@@ -7,6 +7,21 @@ import (
 	"time"
 )
 
+func writeTempConfig(t *testing.T, cfgYAML string) string {
+	t.Helper()
+	cfgFile, err := os.CreateTemp(t.TempDir(), "config-*.yaml")
+	if err != nil {
+		t.Fatalf("CreateTemp(config): %v", err)
+	}
+	if _, err := cfgFile.WriteString(cfgYAML); err != nil {
+		t.Fatalf("WriteString(config): %v", err)
+	}
+	if err := cfgFile.Close(); err != nil {
+		t.Fatalf("Close(config): %v", err)
+	}
+	return cfgFile.Name()
+}
+
 func TestLoadAppliesDefaultsFileEnvAndPasswordFile(t *testing.T) {
 	passFile, err := os.CreateTemp(t.TempDir(), "password")
 	if err != nil {
@@ -19,11 +34,7 @@ func TestLoadAppliesDefaultsFileEnvAndPasswordFile(t *testing.T) {
 		t.Fatalf("Close(password): %v", err)
 	}
 
-	cfgFile, err := os.CreateTemp(t.TempDir(), "config-*.yaml")
-	if err != nil {
-		t.Fatalf("CreateTemp(config): %v", err)
-	}
-	cfgYAML := strings.Join([]string{
+	cfgPath := writeTempConfig(t, strings.Join([]string{
 		"vlogs:",
 		"  url: http://victorialogs:9428",
 		"  basicAuth:",
@@ -34,13 +45,7 @@ func TestLoadAppliesDefaultsFileEnvAndPasswordFile(t *testing.T) {
 		"log:",
 		"  format: text",
 		"",
-	}, "\n")
-	if _, err := cfgFile.WriteString(cfgYAML); err != nil {
-		t.Fatalf("WriteString(config): %v", err)
-	}
-	if err := cfgFile.Close(); err != nil {
-		t.Fatalf("Close(config): %v", err)
-	}
+	}, "\n"))
 
 	t.Setenv("PROXY_SERVER_LISTENADDR", ":9999")
 	t.Setenv("PROXY_LABELS_KNOWNLABELS", " app , team,, env ")
@@ -48,7 +53,7 @@ func TestLoadAppliesDefaultsFileEnvAndPasswordFile(t *testing.T) {
 	t.Setenv("PROXY_LABELS_DENYFIELDS", " _stream , _stream_id ")
 	t.Setenv("PROXY_LOG_LEVEL", "debug")
 
-	cfg, err := Load(cfgFile.Name())
+	cfg, err := Load(cfgPath)
 	if err != nil {
 		t.Fatalf("Load(): %v", err)
 	}
@@ -107,26 +112,16 @@ func TestLoadAppliesDefaultsFileEnvAndPasswordFile(t *testing.T) {
 }
 
 func TestLoadAllowsExplicitLabelRemapFromConfig(t *testing.T) {
-	cfgFile, err := os.CreateTemp(t.TempDir(), "config-*.yaml")
-	if err != nil {
-		t.Fatalf("CreateTemp(config): %v", err)
-	}
-	cfgYAML := strings.Join([]string{
+	cfgPath := writeTempConfig(t, strings.Join([]string{
 		"vlogs:",
 		"  url: http://victorialogs:9428",
 		"labels:",
 		"  labelRemap:",
 		"    detected_level: level",
 		"",
-	}, "\n")
-	if _, err := cfgFile.WriteString(cfgYAML); err != nil {
-		t.Fatalf("WriteString(config): %v", err)
-	}
-	if err := cfgFile.Close(); err != nil {
-		t.Fatalf("Close(config): %v", err)
-	}
+	}, "\n"))
 
-	cfg, err := Load(cfgFile.Name())
+	cfg, err := Load(cfgPath)
 	if err != nil {
 		t.Fatalf("Load(): %v", err)
 	}
@@ -137,11 +132,7 @@ func TestLoadAllowsExplicitLabelRemapFromConfig(t *testing.T) {
 }
 
 func TestLoadAllowsExplicitServiceNameFallbackFieldsFromConfig(t *testing.T) {
-	cfgFile, err := os.CreateTemp(t.TempDir(), "config-*.yaml")
-	if err != nil {
-		t.Fatalf("CreateTemp(config): %v", err)
-	}
-	cfgYAML := strings.Join([]string{
+	cfgPath := writeTempConfig(t, strings.Join([]string{
 		"vlogs:",
 		"  url: http://victorialogs:9428",
 		"labels:",
@@ -149,15 +140,9 @@ func TestLoadAllowsExplicitServiceNameFallbackFieldsFromConfig(t *testing.T) {
 		"    - svc",
 		"    - app",
 		"",
-	}, "\n")
-	if _, err := cfgFile.WriteString(cfgYAML); err != nil {
-		t.Fatalf("WriteString(config): %v", err)
-	}
-	if err := cfgFile.Close(); err != nil {
-		t.Fatalf("Close(config): %v", err)
-	}
+	}, "\n"))
 
-	cfg, err := Load(cfgFile.Name())
+	cfg, err := Load(cfgPath)
 	if err != nil {
 		t.Fatalf("Load(): %v", err)
 	}
@@ -168,25 +153,15 @@ func TestLoadAllowsExplicitServiceNameFallbackFieldsFromConfig(t *testing.T) {
 }
 
 func TestLoadAllowsExplicitAggregationScanLimitFromConfig(t *testing.T) {
-	cfgFile, err := os.CreateTemp(t.TempDir(), "config-*.yaml")
-	if err != nil {
-		t.Fatalf("CreateTemp(config): %v", err)
-	}
-	cfgYAML := strings.Join([]string{
+	cfgPath := writeTempConfig(t, strings.Join([]string{
 		"vlogs:",
 		"  url: http://victorialogs:9428",
 		"limits:",
 		"  aggregationScanLimit: 1234",
 		"",
-	}, "\n")
-	if _, err := cfgFile.WriteString(cfgYAML); err != nil {
-		t.Fatalf("WriteString(config): %v", err)
-	}
-	if err := cfgFile.Close(); err != nil {
-		t.Fatalf("Close(config): %v", err)
-	}
+	}, "\n"))
 
-	cfg, err := Load(cfgFile.Name())
+	cfg, err := Load(cfgPath)
 	if err != nil {
 		t.Fatalf("Load(): %v", err)
 	}
@@ -197,11 +172,7 @@ func TestLoadAllowsExplicitAggregationScanLimitFromConfig(t *testing.T) {
 }
 
 func TestLoadAllowsExplicitDrilldownLimitsFromConfig(t *testing.T) {
-	cfgFile, err := os.CreateTemp(t.TempDir(), "config-*.yaml")
-	if err != nil {
-		t.Fatalf("CreateTemp(config): %v", err)
-	}
-	cfgYAML := strings.Join([]string{
+	cfgPath := writeTempConfig(t, strings.Join([]string{
 		"vlogs:",
 		"  url: http://victorialogs:9428",
 		"drilldownLimits:",
@@ -216,15 +187,9 @@ func TestLoadAllowsExplicitDrilldownLimitsFromConfig(t *testing.T) {
 		"  volumeMaxSeries: 123456",
 		"  version: custom",
 		"",
-	}, "\n")
-	if _, err := cfgFile.WriteString(cfgYAML); err != nil {
-		t.Fatalf("WriteString(config): %v", err)
-	}
-	if err := cfgFile.Close(); err != nil {
-		t.Fatalf("Close(config): %v", err)
-	}
+	}, "\n"))
 
-	cfg, err := Load(cfgFile.Name())
+	cfg, err := Load(cfgPath)
 	if err != nil {
 		t.Fatalf("Load(): %v", err)
 	}
@@ -253,11 +218,7 @@ func TestLoadAllowsExplicitDrilldownLimitsFromConfig(t *testing.T) {
 }
 
 func TestLoadDefaultsDrilldownLimitsFromRuntimeLimits(t *testing.T) {
-	cfgFile, err := os.CreateTemp(t.TempDir(), "config-*.yaml")
-	if err != nil {
-		t.Fatalf("CreateTemp(config): %v", err)
-	}
-	cfgYAML := strings.Join([]string{
+	cfgPath := writeTempConfig(t, strings.Join([]string{
 		"vlogs:",
 		"  url: http://victorialogs:9428",
 		"  timeout: 45s",
@@ -265,15 +226,9 @@ func TestLoadDefaultsDrilldownLimitsFromRuntimeLimits(t *testing.T) {
 		"  maxLimit: 2048",
 		"  maxStreamsPerResponse: 321",
 		"",
-	}, "\n")
-	if _, err := cfgFile.WriteString(cfgYAML); err != nil {
-		t.Fatalf("WriteString(config): %v", err)
-	}
-	if err := cfgFile.Close(); err != nil {
-		t.Fatalf("Close(config): %v", err)
-	}
+	}, "\n"))
 
-	cfg, err := Load(cfgFile.Name())
+	cfg, err := Load(cfgPath)
 	if err != nil {
 		t.Fatalf("Load(): %v", err)
 	}
@@ -290,11 +245,7 @@ func TestLoadDefaultsDrilldownLimitsFromRuntimeLimits(t *testing.T) {
 }
 
 func TestLoadAllowsExplicitLabelAndFieldFiltersFromConfig(t *testing.T) {
-	cfgFile, err := os.CreateTemp(t.TempDir(), "config-*.yaml")
-	if err != nil {
-		t.Fatalf("CreateTemp(config): %v", err)
-	}
-	cfgYAML := strings.Join([]string{
+	cfgPath := writeTempConfig(t, strings.Join([]string{
 		"vlogs:",
 		"  url: http://victorialogs:9428",
 		"labels:",
@@ -308,15 +259,9 @@ func TestLoadAllowsExplicitLabelAndFieldFiltersFromConfig(t *testing.T) {
 		"  denyFields:",
 		"    - _msg",
 		"",
-	}, "\n")
-	if _, err := cfgFile.WriteString(cfgYAML); err != nil {
-		t.Fatalf("WriteString(config): %v", err)
-	}
-	if err := cfgFile.Close(); err != nil {
-		t.Fatalf("Close(config): %v", err)
-	}
+	}, "\n"))
 
-	cfg, err := Load(cfgFile.Name())
+	cfg, err := Load(cfgPath)
 	if err != nil {
 		t.Fatalf("Load(): %v", err)
 	}
@@ -336,18 +281,9 @@ func TestLoadAllowsExplicitLabelAndFieldFiltersFromConfig(t *testing.T) {
 }
 
 func TestLoadReturnsConversionErrorForInvalidDuration(t *testing.T) {
-	cfgFile, err := os.CreateTemp(t.TempDir(), "config-*.yaml")
-	if err != nil {
-		t.Fatalf("CreateTemp(config): %v", err)
-	}
-	if _, err := cfgFile.WriteString("vlogs:\n  url: http://victorialogs:9428\nserver:\n  readTimeout: nope\n"); err != nil {
-		t.Fatalf("WriteString(config): %v", err)
-	}
-	if err := cfgFile.Close(); err != nil {
-		t.Fatalf("Close(config): %v", err)
-	}
+	cfgPath := writeTempConfig(t, "vlogs:\n  url: http://victorialogs:9428\nserver:\n  readTimeout: nope\n")
 
-	_, err = Load(cfgFile.Name())
+	_, err := Load(cfgPath)
 	if err == nil {
 		t.Fatal("expected invalid duration error, got nil")
 	}
@@ -357,25 +293,15 @@ func TestLoadReturnsConversionErrorForInvalidDuration(t *testing.T) {
 }
 
 func TestLoadAllowsExplicitReadBufferSizeFromConfig(t *testing.T) {
-	cfgFile, err := os.CreateTemp(t.TempDir(), "config-*.yaml")
-	if err != nil {
-		t.Fatalf("CreateTemp(config): %v", err)
-	}
-	cfgYAML := strings.Join([]string{
+	cfgPath := writeTempConfig(t, strings.Join([]string{
 		"vlogs:",
 		"  url: http://victorialogs:9428",
 		"server:",
 		"  readBufferSize: 131072",
 		"",
-	}, "\n")
-	if _, err := cfgFile.WriteString(cfgYAML); err != nil {
-		t.Fatalf("WriteString(config): %v", err)
-	}
-	if err := cfgFile.Close(); err != nil {
-		t.Fatalf("Close(config): %v", err)
-	}
+	}, "\n"))
 
-	cfg, err := Load(cfgFile.Name())
+	cfg, err := Load(cfgPath)
 	if err != nil {
 		t.Fatalf("Load(): %v", err)
 	}
