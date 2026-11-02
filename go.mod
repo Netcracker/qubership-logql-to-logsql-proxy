@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	github.com/fasthttp/router v1.5.4
 	github.com/prometheus/client_golang v1.25.0
-	github.com/valyala/fasthttp v1.76.0
+	github.com/valyala/fasthttp v1.77.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
